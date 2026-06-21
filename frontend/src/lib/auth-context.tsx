@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { user: fetched } = await api.me();
       setUser(fetched);
       // Best-effort push registration (non-blocking, ignored on web)
-      registerForPush(fetched.userId).catch(() => {});
+      registerForPush().catch(() => {});
     } catch {
       await storage.secureRemove(TOKEN_KEY);
       setUser(null);
@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setSession = useCallback(async (token: string, u: AppUser) => {
     await storage.secureSet(TOKEN_KEY, token);
     setUser(u);
-    registerForPush(u.userId).catch(() => {});
+    registerForPush().catch(() => {});
   }, []);
 
   const signOut = useCallback(async () => {

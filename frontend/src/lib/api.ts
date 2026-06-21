@@ -181,11 +181,11 @@ export const api = {
     }>("/seller/dashboard", {}, true),
 
   // ----- Notifications & Push -----
-  registerPush: (userId: string, platform: string, deviceToken: string) =>
+  registerPush: (platform: string, deviceToken: string) =>
     request<{ status: string }>("/register-push", {
       method: "POST",
-      body: JSON.stringify({ user_id: userId, platform, device_token: deviceToken }),
-    }),
+      body: JSON.stringify({ platform, device_token: deviceToken }),
+    }, true),
   listNotifications: (limit = 50) =>
     request<{ notifications: AppNotification[]; unreadCount: number }>(
       `/notifications?limit=${limit}`,

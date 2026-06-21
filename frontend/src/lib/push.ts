@@ -6,9 +6,10 @@ import { api } from "./api";
 /**
  * Request push permission, fetch the native device push token, and register it with the backend.
  * Safe to call repeatedly (e.g. on every app open & after login).
+ * The backend pulls userId from the auth token; we just send the device token.
  * Never throws — push failures must not block app usage.
  */
-export async function registerForPush(userId: string): Promise<boolean> {
+export async function registerForPush(): Promise<boolean> {
   if (Platform.OS === "web") return false;
   try {
     const settings = await Notifications.getPermissionsAsync();
@@ -20,7 +21,7 @@ export async function registerForPush(userId: string): Promise<boolean> {
     if (status !== "granted") return false;
     const token = await Notifications.getDevicePushTokenAsync();
     if (!token?.data) return false;
-    await api.registerPush(userId, Platform.OS, String(token.data));
+    await api.registerPush(Platform.OS, String(token.data));
     return true;
   } catch (e) {
     // Swallow errors — push is best-effort

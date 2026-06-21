@@ -546,16 +546,22 @@ async def seller_dashboard(user: dict = Depends(current_user)):
 # ===================== Notifications & Push =====================
 
 class RegisterPushBody(BaseModel):
-    user_id: str
     platform: str  # "android" | "ios"
     device_token: str
 
 
 @api_router.post("/register-push", status_code=201)
-async def register_push(body: RegisterPushBody):
-    """Register a device push token with the upstream relay (SuprSend)."""
+async def register_push(body: RegisterPushBody, user: dict = Depends(current_user)):
+    """Register a device push token with the upstream relay (SuprSend).
+    Authenticated — the token is always registered under the calling user.
+    """
+    payload = {
+        "user_id": user["userId"],
+        "platform": body.platform,
+        "device_token": body.device_token,
+    }
     try:
-        resp = await _push_client.post("/api/v1/push/users/register", json=body.model_dump())
+        resp = await _push_client.post("/api/v1/push/users/register", json=payload)
         if resp.status_code == 401:
             raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
         if resp.status_code >= 500:

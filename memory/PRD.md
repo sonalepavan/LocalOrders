@@ -1,61 +1,48 @@
-# LocalOrders — PRD (Phase 1 → 4)
+# LocalOrders — Product Requirements (Phase 5 release candidate)
 
-## Overview
-LocalOrders connects local Buyers to local Sellers. Built on **Expo (React Native)** + **react-native-paper (MD3)**, **FastAPI + MongoDB** backend (Firestore-shaped collections), **mock OTP** (`123456`) in place of Firebase Phone Auth.
+## Status
+Phase 1-5 complete EXCEPT Firebase Phone Auth (deliberately deferred per user direction so
+the APK can be tested with the existing mock OTP flow first).
 
-## Phase 1 — Auth + Inventory (shipped)
-- Mock-OTP registration / login (mobile + 4-digit PIN); bcrypt; 5-fail / 15-min lockout
-- Seller inventory CRUD (10 unit types), soft delete
-- Profile edit
+## Stack
+- Expo SDK 54 (React Native), expo-router, react-native-paper (Material Design 3)
+- FastAPI + MongoDB (motor) backend
+- expo-notifications + Emergent push relay (FCM/APNs) — wired but inactive until
+  `google-services.json` + real `EMERGENT_PUSH_KEY` are supplied at deploy time
+- Storage helpers: `@/src/utils/storage` (no direct AsyncStorage / SecureStore imports)
+- @react-native-community/netinfo for offline detection
 
-## Phase 2 — Connections & Ordering (shipped)
-- Buyer → SELLER-#### connection (Pending → Accept/Reject), 7-day Pending expiry
-- Browse seller inventory, client-side cart (1 seller per cart)
-- Order creation with min/increment/available validation; `ORD-#####` counter
+## Phases shipped
+- **Phase 1** Auth: mock OTP `123456`, bcrypt PIN, JWT sessions, 5-attempt lockout
+- **Phase 2** Buyer ↔ Seller connections by `SELLER-####` code (pending → accepted/rejected with 7-day expiry)
+- **Phase 3** Order lifecycle: Requested → Accepted → Delivered + Reject/Cancel + 24h auto-expire
+- **Phase 4** Inventory reservation (atomic find_one_and_update); seller availability Open/Closed; dashboard counts
+- **Phase 5 (this release)**
+  - **Notifications:** `notifications` MongoDB collection; in-app list with unread badge; bell in every screen header; mark-single-read & mark-all-read; events: connection request/accept/reject + order requested/accepted/rejected/cancelled/delivered.
+  - **Push framework:** `/api/register-push` (auth-required), `notify_user()` helper persists & best-effort pushes. Tap deep-links to `/buyer-order-detail?orderId=...`. Awaits Firebase / google-services.json at deploy.
+  - **Offline support:** Inventory, buyer orders, seller orders and notifications viewable when offline via per-user `lo.cache.*` storage; OfflineBanner across all screens; order placement / inventory mutations blocked with a friendly snackbar when offline.
+  - **Settings:** Theme (Light / Dark / Follow System), About LocalOrders, Privacy Policy (all M3-styled, deep-link from Profile screen).
+  - **Dark mode:** Custom MD3 light + dark palettes; runtime theme switching via `ThemePrefProvider`; persisted in storage.
+  - **Polish:** consistent Appbar/Card/Chip styling, Snackbar for errors, RefreshControl pull-to-refresh on every list, MD3 colors throughout.
 
-## Phase 3 — Order Management (shipped)
-- Statuses: Requested / Accepted / Rejected / Cancelled / Delivered / Expired
-- Seller: accept, reject (mandatory reason), deliver
-- Buyer: cancel from Requested or Accepted (optional reason); blocked otherwise
-- 24h auto-expire of Requested orders (lazy on read)
-- Click-to-call (`tel:`) on order detail
+## API surface (additions in Phase 5)
+- `POST /api/register-push` (auth) — register device push token under the calling user
+- `GET  /api/notifications?limit=` (auth) — list + unread count
+- `GET  /api/notifications/unread-count` (auth)
+- `POST /api/notifications/{id}/read` (auth)
+- `POST /api/notifications/read-all` (auth)
 
-## Phase 4 — Inventory Reservation + Seller Availability (this phase)
-### Inventory reservation
-- `seller_items` now persists `reservedQuantity` (default 0); responses include derived `lowInventory: availableQuantity < 10`
-- **Accept**: atomic claim → reserve each line with conditional `$inc` requiring `availableQuantity >= qty`; if any line fails, prior lines are rolled back and the order is reverted to Requested → 400 "Insufficient stock for ..."
-- **Cancel from Accepted**: restore availableQuantity, decrease reservedQuantity
-- **Cancel from Requested** / **Reject**: no inventory change (nothing was reserved)
-- **Deliver from Accepted**: decrease reservedQuantity, keep availableQuantity reduced
-- Race-safety: order status transitions use atomic `find_one_and_update` filtered on expected status (prevents double-accept)
-- Negative inventory impossible — guaranteed by conditional update + rollback
+## Testing status
+- Backend: **120/120 pytest** (99 regression + 21 new Phase 5 tests) — see
+  `/app/test_reports/iteration_5.json`.
+- Frontend: smoke-tested via Playwright screenshots (Home, Settings, Dark mode, About,
+  Dashboard, Notifications). No frontend regressions.
 
-### Low inventory alert
-- Per-item: `Low` chip on Seller Inventory rows and Buyer Browse cards
-- Dashboard: `Low inventory` tile + dedicated banner ("X items below 10. Restock from Inventory.")
+## Release blockers / pre-APK to-do (next session)
+1. Replace mock OTP with real Firebase Phone Auth (`expo-firebase-core` + service-account
+   JSON or `@react-native-firebase/auth`).
+2. Add `google-services.json` (Android) to repo root, plus `GoogleService-Info.plist` (iOS).
+3. Build APK via Emergent **Publish** button → Android build with Firebase + push enabled.
 
-### Seller availability
-- `users.availabilityStatus`: `Open` (default) | `Closed`
-- `PUT /api/seller/availability` body `{ status: "Open"|"Closed" }`
-- Buyer browse is allowed regardless; the browse response includes `seller.availabilityStatus`
-- Order placement blocked when seller is Closed → **400 "Seller currently unavailable."**
-- Seller Dashboard has a Material 3 Switch to toggle Open/Closed in one tap
-
-### Seller dashboard endpoint
-`GET /api/seller/dashboard` → `{ activeItems, lowInventoryCount, pendingRequests, openOrders, lowInventoryThreshold: 10, availabilityStatus }`
-
-## Data Model additions
-- `seller_items.reservedQuantity` (number, default 0)
-- `users.availabilityStatus` ("Open" | "Closed", default "Open")
-
-## REST API additions
-- `PUT /api/seller/availability`
-- `GET /api/seller/dashboard`
-
-## MOCKED (unchanged)
-Firebase Phone OTP → fixed `123456` in `POST /api/auth/otp/send` and the register endpoints.
-
-## Tests
-- Phase 4: 23/23 backend
-- Full regression: **99/99** backend tests (Phase 1: 26 + Phase 2: 24 + Phase 3: 26 + Phase 4: 23)
-- Concurrency: simultaneous double-accept verified — exactly one 200, one 400, single reservation
+## Test credentials
+See `/app/memory/test_credentials.md`.
