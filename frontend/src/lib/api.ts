@@ -179,6 +179,40 @@ export const api = {
       lowInventoryThreshold: number;
       availabilityStatus: "Open" | "Closed";
     }>("/seller/dashboard", {}, true),
+
+  // ----- Notifications & Push -----
+  registerPush: (userId: string, platform: string, deviceToken: string) =>
+    request<{ status: string }>("/register-push", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, platform, device_token: deviceToken }),
+    }),
+  listNotifications: (limit = 50) =>
+    request<{ notifications: AppNotification[]; unreadCount: number }>(
+      `/notifications?limit=${limit}`,
+      {},
+      true,
+    ),
+  unreadCount: () =>
+    request<{ unreadCount: number }>("/notifications/unread-count", {}, true),
+  markRead: (notificationId: string) =>
+    request<{ notification: AppNotification }>(
+      `/notifications/${notificationId}/read`,
+      { method: "POST" },
+      true,
+    ),
+  markAllRead: () =>
+    request<{ markedCount: number }>("/notifications/read-all", { method: "POST" }, true),
+};
+
+export type AppNotification = {
+  notificationId: string;
+  userId: string;
+  type: string;
+  title: string;
+  body: string;
+  data: Record<string, any>;
+  readAt: string | null;
+  createdDate: string;
 };
 
 export type ConnectionStatus = "Pending" | "Accepted" | "Rejected" | "Expired";

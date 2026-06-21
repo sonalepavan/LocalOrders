@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
-import { Appbar, Button, Card, HelperText, Snackbar, Text, TextInput, useTheme } from "react-native-paper";
+import { Appbar, Button, Card, Divider, HelperText, List, Snackbar, Text, TextInput, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api } from "@/src/lib/api";
@@ -88,6 +88,26 @@ export function ProfileScreen() {
         <Button mode="contained" onPress={save} loading={saving} disabled={saving} contentStyle={{ height: 52 }} style={{ borderRadius: 16, marginTop: 8 }} testID="save-profile-btn">
           Save Changes
         </Button>
+
+        <Card style={[styles.card, { marginTop: 16 }]}>
+          <List.Item
+            title="Settings"
+            description="Theme, About, Privacy Policy"
+            left={(p) => <List.Icon {...p} icon="cog-outline" />}
+            right={(p) => <List.Icon {...p} icon="chevron-right" />}
+            onPress={() => router.push("/settings" as any)}
+            testID="open-settings-btn"
+          />
+          <Divider />
+          <List.Item
+            title="Notifications"
+            description="View order updates & alerts"
+            left={(p) => <List.Icon {...p} icon="bell-outline" />}
+            right={(p) => <List.Icon {...p} icon="chevron-right" />}
+            onPress={() => router.push("/notifications" as any)}
+            testID="open-notifications-btn"
+          />
+        </Card>
       </ScrollView>
       <Snackbar visible={!!snack} onDismiss={() => setSnack("")} duration={2500}>
         {snack}

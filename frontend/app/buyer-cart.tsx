@@ -6,9 +6,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api } from "@/src/lib/api";
 import { Cart, CartLine, cartTotal, clearCart, getCart, saveCart, validateLineQty } from "@/src/lib/cart";
+import { useNetwork } from "@/src/lib/network";
 
 export default function BuyerCart() {
   const theme = useTheme();
+  const { online } = useNetwork();
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
@@ -50,6 +52,10 @@ export default function BuyerCart() {
 
   const placeOrder = async () => {
     if (!cart || cart.lines.length === 0) return;
+    if (!online) {
+      setSnack("Order placement requires an internet connection");
+      return;
+    }
     for (const l of cart.lines) {
       const err = validateLineQty(l);
       if (err) { setSnack(err); return; }

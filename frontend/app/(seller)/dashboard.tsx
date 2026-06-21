@@ -4,6 +4,7 @@ import { ScrollView, StyleSheet, View } from "react-native";
 import { Appbar, Button, Card, Snackbar, Surface, Switch, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { NotificationBell } from "@/src/components/NotificationBell";
 import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth-context";
 
@@ -61,6 +62,8 @@ export default function SellerDashboard() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={["top"]}>
       <Appbar.Header mode="small" elevated>
         <Appbar.Content title="Dashboard" />
+        <NotificationBell testID="seller-dashboard-bell" />
+        <Appbar.Action icon="cog-outline" onPress={() => router.push("/settings" as any)} testID="settings-btn" />
         <Appbar.Action icon="logout" onPress={onLogout} testID="logout-btn" />
       </Appbar.Header>
       <ScrollView contentContainerStyle={styles.body}>

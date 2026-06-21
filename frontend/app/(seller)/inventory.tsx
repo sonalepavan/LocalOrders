@@ -4,26 +4,63 @@ import { FlatList, StyleSheet, View } from "react-native";
 import { ActivityIndicator, Appbar, Card, Chip, FAB, IconButton, SegmentedButtons, Snackbar, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { NotificationBell } from "@/src/components/NotificationBell";
 import { SellerItem, api } from "@/src/lib/api";
+import { useAuth } from "@/src/lib/auth-context";
+import { useNetwork } from "@/src/lib/network";
+import { CACHE_SCOPES, offlineCache } from "@/src/lib/offline-cache";
 
 export default function Inventory() {
   const theme = useTheme();
+  const { user } = useAuth();
+  const { online } = useNetwork();
   const [items, setItems] = useState<SellerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"active" | "all">("active");
   const [snack, setSnack] = useState("");
+  const [fromCache, setFromCache] = useState(false);
 
   const load = useCallback(async () => {
+    if (!user) return;
     setLoading(true);
+    if (!online) {
+      const cached = await offlineCache.load<SellerItem[]>(
+        CACHE_SCOPES.sellerInventory,
+        user.userId,
+        [],
+      );
+      const list = filter === "active" ? cached.filter((i) => i.isActive) : cached;
+      setItems(list);
+      setFromCache(true);
+      setLoading(false);
+      return;
+    }
     try {
       const { items: list } = await api.listItems(filter === "all");
       setItems(list);
+      setFromCache(false);
+      // Cache the full list (all) so we have data when offline regardless of filter.
+      if (filter === "all") {
+        await offlineCache.save(CACHE_SCOPES.sellerInventory, user.userId, list);
+      } else {
+        // Also fetch+cache the all-version in background so offline view has everything.
+        api.listItems(true).then(({ items: all }) => {
+          offlineCache.save(CACHE_SCOPES.sellerInventory, user.userId, all);
+        }).catch(() => {});
+      }
     } catch (e: any) {
+      const cached = await offlineCache.load<SellerItem[]>(
+        CACHE_SCOPES.sellerInventory,
+        user.userId,
+        [],
+      );
+      setItems(filter === "active" ? cached.filter((i) => i.isActive) : cached);
+      setFromCache(true);
       setSnack(e?.message || "Failed to load items");
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, user, online]);
 
   useFocusEffect(
     useCallback(() => {
@@ -32,6 +69,10 @@ export default function Inventory() {
   );
 
   const onDelete = async (id: string) => {
+    if (!online) {
+      setSnack("Inventory changes require an internet connection");
+      return;
+    }
     try {
       await api.deleteItem(id);
       setSnack("Item marked inactive");
@@ -45,6 +86,7 @@ export default function Inventory() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={["top"]}>
       <Appbar.Header mode="small" elevated>
         <Appbar.Content title="Inventory" />
+        <NotificationBell testID="seller-inventory-bell" />
       </Appbar.Header>
 
       <View style={styles.filterRow}>
@@ -56,6 +98,13 @@ export default function Inventory() {
             { value: "all", label: "All", testID: "filter-all" },
           ]}
         />
+        {fromCache && (
+          <View style={[styles.cacheNote, { backgroundColor: theme.colors.surfaceVariant }]}>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+              Showing offline-saved inventory
+            </Text>
+          </View>
+        )}
       </View>
 
       {loading ? (
@@ -139,4 +188,11 @@ const styles = StyleSheet.create({
   kvRow: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginTop: 12 },
   kv: { minWidth: 70 },
   fab: { position: "absolute", right: 16, bottom: 24, borderRadius: 16 },
+  cacheNote: {
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    alignItems: "center",
+  },
 });

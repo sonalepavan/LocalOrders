@@ -4,6 +4,7 @@ import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { ActivityIndicator, Appbar, Banner, Card, Chip, FAB, Snackbar, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { NotificationBell } from "@/src/components/NotificationBell";
 import { Connection, api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth-context";
 import { Cart, getCart } from "@/src/lib/cart";
@@ -44,6 +45,7 @@ export default function BuyerDashboard() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={["top"]}>
       <Appbar.Header mode="small" elevated>
         <Appbar.Content title="Sellers" />
+        <NotificationBell testID="buyer-home-bell" />
         <Appbar.Action icon="magnify" onPress={() => router.push("/buyer-add-seller")} testID="search-seller-btn" />
         <Appbar.Action icon="logout" onPress={onLogout} testID="logout-btn" />
       </Appbar.Header>

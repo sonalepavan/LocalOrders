@@ -7,7 +7,7 @@ Mirrors Firebase Firestore data shape using MongoDB collections:
 OTP is mocked: any registration accepts `123456` as the verification code.
 """
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -17,11 +17,12 @@ import logging
 import re
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+import httpx
 
 
 ROOT_DIR = Path(__file__).parent
@@ -39,6 +40,79 @@ MAX_FAILED_ATTEMPTS = 5
 LOCK_DURATION_MINUTES = 15
 
 UNIT_TYPES = ["Piece", "Bottle", "Packet", "Kg", "Gram", "Litre", "ml", "Dozen", "Can", "Box"]
+
+# ---------- Emergent Push relay ----------
+PUSH_BASE_URL = "https://integrations.emergentagent.com"
+PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
+_push_client = httpx.AsyncClient(
+    base_url=PUSH_BASE_URL,
+    headers={"X-Push-Key": PUSH_KEY},
+    timeout=10.0,
+)
+
+
+async def send_push(
+    recipients: List[str],
+    data: Dict[str, Any],
+    idempotency_key: Optional[str] = None,
+) -> None:
+    """Relay a push notification to Emergent push provider (FCM/APNs).
+    Wrap callers in try/except so push failure never blocks the primary operation.
+    """
+    if not recipients:
+        return
+    if len(recipients) > 100:
+        raise ValueError("max 100 recipients per /trigger call")
+    if "title" not in data or "message" not in data:
+        raise ValueError("data must include title and message")
+    payload: Dict[str, Any] = {"recipients": recipients, "data": data}
+    if idempotency_key:
+        payload["$idempotency_key"] = idempotency_key
+    resp = await _push_client.post("/api/v1/push/trigger", json=payload)
+    if resp.status_code == 401:
+        raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
+    if resp.status_code >= 500:
+        raise HTTPException(502, "Push provider unavailable")
+    resp.raise_for_status()
+
+
+async def notify_user(
+    user_id: str,
+    notif_type: str,
+    title: str,
+    body: str,
+    data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Persist an in-app notification AND attempt push delivery (non-blocking)."""
+    doc = {
+        "notificationId": str(uuid.uuid4()),
+        "userId": user_id,
+        "type": notif_type,
+        "title": title,
+        "body": body,
+        "data": data or {},
+        "readAt": None,
+        "createdDate": utc_now_iso(),
+    }
+    try:
+        await db.notifications.insert_one(doc)
+    except Exception as e:
+        logger.warning(f"Notification persist failed (non-blocking): {e}")
+
+    # Build deeplink for tap-to-navigate
+    push_data: Dict[str, Any] = {"title": title, "message": body}
+    if data and data.get("orderId"):
+        push_data["action_url"] = f"/buyer-order-detail?orderId={data['orderId']}"
+    elif data and data.get("connectionId"):
+        push_data["action_url"] = "/(buyer)/home"
+    try:
+        await send_push(
+            recipients=[user_id],
+            data=push_data,
+            idempotency_key=doc["notificationId"],
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed (non-blocking): {e}")
 
 app = FastAPI(title="LocalOrders API")
 api_router = APIRouter(prefix="/api")
@@ -469,6 +543,90 @@ async def seller_dashboard(user: dict = Depends(current_user)):
     }
 
 
+# ===================== Notifications & Push =====================
+
+class RegisterPushBody(BaseModel):
+    user_id: str
+    platform: str  # "android" | "ios"
+    device_token: str
+
+
+@api_router.post("/register-push", status_code=201)
+async def register_push(body: RegisterPushBody):
+    """Register a device push token with the upstream relay (SuprSend)."""
+    try:
+        resp = await _push_client.post("/api/v1/push/users/register", json=body.model_dump())
+        if resp.status_code == 401:
+            raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
+        if resp.status_code >= 500:
+            raise HTTPException(502, "Push provider unavailable")
+        resp.raise_for_status()
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Never block app login on push registration failure
+        logger.warning(f"register-push failed (non-blocking): {e}")
+        return {"status": "deferred"}
+    return {"status": "registered"}
+
+
+def notification_public(doc: dict) -> dict:
+    return {
+        "notificationId": doc["notificationId"],
+        "userId": doc["userId"],
+        "type": doc["type"],
+        "title": doc["title"],
+        "body": doc["body"],
+        "data": doc.get("data") or {},
+        "readAt": doc.get("readAt"),
+        "createdDate": doc["createdDate"],
+    }
+
+
+@api_router.get("/notifications")
+async def list_notifications(
+    limit: int = Query(default=50, ge=1, le=200),
+    user: dict = Depends(current_user),
+):
+    docs = await db.notifications.find(
+        {"userId": user["userId"]}, {"_id": 0}
+    ).sort("createdDate", -1).to_list(limit)
+    unread = await db.notifications.count_documents({"userId": user["userId"], "readAt": None})
+    return {
+        "notifications": [notification_public(d) for d in docs],
+        "unreadCount": unread,
+    }
+
+
+@api_router.get("/notifications/unread-count")
+async def unread_count(user: dict = Depends(current_user)):
+    unread = await db.notifications.count_documents({"userId": user["userId"], "readAt": None})
+    return {"unreadCount": unread}
+
+
+@api_router.post("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, user: dict = Depends(current_user)):
+    res = await db.notifications.find_one_and_update(
+        {"notificationId": notification_id, "userId": user["userId"]},
+        {"$set": {"readAt": utc_now_iso()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    res.pop("_id", None)
+    return {"notification": notification_public(res)}
+
+
+@api_router.post("/notifications/read-all")
+async def mark_all_read(user: dict = Depends(current_user)):
+    now = utc_now_iso()
+    result = await db.notifications.update_many(
+        {"userId": user["userId"], "readAt": None},
+        {"$set": {"readAt": now}},
+    )
+    return {"markedCount": result.modified_count}
+
+
 # ===================== Phase 2: Connections & Orders =====================
 
 ORDER_EXPIRY_HOURS = 24
@@ -623,6 +781,14 @@ async def request_connection(req: ConnectionRequest, user: dict = Depends(curren
         "approvedDateTime": None,
     }
     await db.buyer_seller_connections.insert_one(doc)
+    # Notify the seller of the new connection request
+    await notify_user(
+        seller["userId"],
+        "connection_request",
+        "New connection request",
+        f"{user['firstName']} {user['lastName']} wants to connect with you.",
+        {"connectionId": doc["connectionId"], "buyerId": user["userId"]},
+    )
     return {"connection": connection_public(doc, seller_summary=seller_summary(seller))}
 
 
@@ -683,6 +849,14 @@ async def _set_connection_status(connection_id: str, seller_id: str, new_status:
 async def accept_connection(connection_id: str, user: dict = Depends(current_user)):
     ensure_seller(user)
     fresh = await _set_connection_status(connection_id, user["userId"], "Accepted")
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "connection_accepted",
+        "Connection accepted",
+        f"{biz} accepted your connection request.",
+        {"connectionId": connection_id, "sellerId": user["userId"]},
+    )
     return {"connection": connection_public(fresh)}
 
 
@@ -690,6 +864,14 @@ async def accept_connection(connection_id: str, user: dict = Depends(current_use
 async def reject_connection(connection_id: str, user: dict = Depends(current_user)):
     ensure_seller(user)
     fresh = await _set_connection_status(connection_id, user["userId"], "Rejected")
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "connection_rejected",
+        "Connection rejected",
+        f"{biz} rejected your connection request.",
+        {"connectionId": connection_id, "sellerId": user["userId"]},
+    )
     return {"connection": connection_public(fresh)}
 
 
@@ -791,6 +973,14 @@ async def create_order(req: CreateOrderRequest, user: dict = Depends(current_use
     await db.orders.insert_one(order_doc)
     if order_items_docs:
         await db.order_items.insert_many(order_items_docs)
+    # Notify the seller of the new order
+    await notify_user(
+        req.sellerId,
+        "order_requested",
+        f"New order {order_doc['orderNumber']}",
+        f"{user['firstName']} {user['lastName']} placed an order for ₹{order_doc['totalAmount']:.2f}.",
+        {"orderId": order_id, "buyerId": user["userId"]},
+    )
     return {
         "order": order_public(order_doc),
         "items": [order_item_public(i) for i in order_items_docs],
@@ -1014,6 +1204,14 @@ async def accept_order(order_id: str, user: dict = Depends(current_user)):
         )
         raise HTTPException(status_code=400, detail=err)
 
+    # Notify the buyer
+    await notify_user(
+        fresh["buyerId"],
+        "order_accepted",
+        f"Order {fresh['orderNumber']} accepted",
+        "Your order has been accepted and will be delivered soon.",
+        {"orderId": order_id},
+    )
     return {"order": order_public(fresh)}
 
 
@@ -1027,6 +1225,13 @@ async def reject_order(order_id: str, req: RejectOrderRequest, user: dict = Depe
         extra={"rejectedDateTime": utc_now_iso(), "rejectionReason": req.reason},
     )
     # Reject is only from Requested → nothing was reserved, no inventory change.
+    await notify_user(
+        fresh["buyerId"],
+        "order_rejected",
+        f"Order {fresh['orderNumber']} rejected",
+        f"Reason: {req.reason}",
+        {"orderId": order_id},
+    )
     return {"order": order_public(fresh)}
 
 
@@ -1041,6 +1246,13 @@ async def deliver_order(order_id: str, user: dict = Depends(current_user)):
     )
     # Delivered: keep availableQuantity deducted, clear reservedQuantity.
     await _clear_reservation(order_id)
+    await notify_user(
+        fresh["buyerId"],
+        "order_delivered",
+        f"Order {fresh['orderNumber']} delivered",
+        "Your order has been marked as delivered. Thank you!",
+        {"orderId": order_id},
+    )
     return {"order": order_public(fresh)}
 
 
@@ -1060,6 +1272,16 @@ async def cancel_order(order_id: str, req: CancelOrderRequest, user: dict = Depe
     )
     if pre and pre["orderStatus"] == "Accepted":
         await _restore_inventory(order_id)
+    # Notify the seller
+    reason_txt = (req.reason or "").strip()
+    body = "Order cancelled by buyer." + (f" Reason: {reason_txt}" if reason_txt else "")
+    await notify_user(
+        fresh["sellerId"],
+        "order_cancelled",
+        f"Order {fresh['orderNumber']} cancelled",
+        body,
+        {"orderId": order_id},
+    )
     return {"order": order_public(fresh)}
 
 
