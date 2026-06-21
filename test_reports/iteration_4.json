@@ -1,0 +1,55 @@
+{
+  "summary": "LocalOrders Phase 4 (Inventory Reservation + Seller Availability) backend tested end-to-end via the public ingress with a fresh 23-case pytest suite at /app/backend/tests/test_phase4_inventory_reservation.py. ALL 23/23 PASS. Full regression across Phase 1+2+3+4 = 99/99 PASS in ~60s. Coverage: (a) newly registered seller has availabilityStatus='Open' by default; PUT /seller/availability accepts only Open/Closed (anything else→422); GET /auth/me reflects new status; buyer 403. (b) When seller Closed: POST /buyer/orders → 400 with detail 'Seller currently unavailable.', GET /buyer/sellers/{id}/items still 200 and seller.availabilityStatus='Closed'. (c) item_public initializes reservedQuantity=0 and exposes lowInventory boolean (true when availableQuantity<10, false at exactly 10 — boundary verified). (d) Accept reserves atomically: avail-=qty, reserved+=qty; second accept → 400; inventory remains single-accept. (e) Insufficient-stock accept: stock=10 with two qty=8 orders → first 200, second 400 with 'Insufficient stock for ...', order remains Requested with acceptedDateTime=None, item state UNCHANGED by the failed accept (revert verified). (f) Concurrent double-accept via asyncio.gather(httpx.AsyncClient) → exactly one 200 + one 400, reserved reflects a single accept (no double). (g) Cancel from Accepted restores inventory; Cancel from Requested leaves inventory unchanged; Reject from Requested leaves inventory unchanged; Deliver clears reservedQuantity and keeps availableQuantity reduced. (h) Atomic status claim is independent of stock check: accepting a Cancelled order returns 400 'Cannot change status from Cancelled to Accepted' (not a stock error). (i) Negative-inventory invariant: after mixed flows (accept→cancel, accept→deliver, accept→fail) availableQuantity and reservedQuantity are both ≥0 and exactly match expected ledger. (j) GET /seller/dashboard returns activeItems, lowInventoryCount, pendingRequests, openOrders, lowInventoryThreshold=10, availabilityStatus; buyer→403; openOrders counts both Requested+Accepted. (k) Recursive _id scanner across every Phase 4 response confirms zero Mongo _id leakage.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/seller/orders/{id}/accept",
+        "issue": "Failure-revert path on insufficient stock writes orderStatus back to 'Requested' and $unsets acceptedDateTime in two separate document operations relative to the original atomic claim. With the current standalone Mongo (no transactions), a process crash between the claim and the revert would leave an order stuck in Accepted with no inventory reserved. Not reproducible under normal load, but worth noting. The conditional filter {orderStatus:'Accepted'} on the revert is correct — it prevents an in-flight buyer cancel from being clobbered."
+      },
+      {
+        "endpoint": "_reserve_inventory / _restore_inventory / _clear_reservation",
+        "issue": "Each helper iterates order_items and issues per-line update_one calls (no bulk_write). For very large orders (10+ lines) this multiplies round-trips. Functionally correct (rollback verified); optimization opportunity only."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase4_inventory_reservation.py",
+    "/app/test_reports/pytest/phase4_results.xml",
+    "/app/test_reports/pytest/full_regression.xml"
+  ],
+  "action_items": [
+    "No functional fixes required for Phase 4 acceptance — every spec behaviour is verified green.",
+    "Optional polish: replace per-line update_one loops in _reserve/_restore/_clear with bulk_write for fewer round-trips on multi-line orders.",
+    "Optional carry-over from iteration_3: update server.py:ORDER_STATUSES constant (still lists legacy 'Fulfilled'; should be ['Requested','Accepted','Rejected','Cancelled','Delivered','Expired']). Unused at runtime, cosmetic only.",
+    "Optional architecture: server.py is now ~1080 lines — consider splitting into routers/{auth,inventory,connections,orders,dashboard}.py."
+  ],
+  "critical_code_review_comments": [
+    "Atomic reservation: _reserve_inventory uses a conditional $inc with filter availableQuantity>={qty}. This is race-safe on a single document and prevents negative inventory even without a transaction. Verified by two concurrent accepts on a single-line order — exactly one succeeds.",
+    "Two-stage accept (claim status → reserve → revert on failure) is correct given Mongo standalone constraints. The revert filter {orderStatus:'Accepted'} prevents clobbering a buyer-initiated cancel that lands in the small window. Worth documenting in PRD that an orphan acceptedDateTime is theoretically possible if the process is SIGKILLed between the claim and the rollback — accept idempotency on the next call will still surface it (status=Accepted, no reservation), so a one-time fix-up may be needed.",
+    "Cancel correctly inspects the pre-transition status before deciding whether to restore inventory. Pre-read happens outside the atomic claim so a parallel transition would race — but the only legal sources are Requested|Accepted, both of which converge to the right inventory ledger when handled in order (Requested→no-op restore, Accepted→restore). Verified.",
+    "Deliver uses _clear_reservation which does NOT touch availableQuantity — matches the spec that delivered stock stays sold. Verified.",
+    "item_public.lowInventory uses strict less-than against LOW_INVENTORY_THRESHOLD=10 — boundary test at exactly 10 confirms False (not low) and at 9 confirms True. Matches PRD wording 'availableQuantity < 10'.",
+    "AvailabilityRequest uses Literal['Open','Closed'] → FastAPI 422 for unknown values, exactly as required. /seller/availability returns user_public which includes availabilityStatus (seller-only branch).",
+    "Order creation now gates on seller.availabilityStatus=='Open' AFTER the accepted-connection check; returns 400 'Seller currently unavailable.' (string matches spec exactly). Browse path /buyer/sellers/{id}/items deliberately does NOT gate on availabilityStatus and surfaces it in seller_summary — verified.",
+    "Recursive _id scanner across availability PUT response, dashboard, item_public, browse response, order detail, and all transition responses confirms zero Mongo _id leakage."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase4_inventory_reservation.py (created — 23 tests, 9 test classes)"
+  ],
+  "success_rate": {
+    "backend": "100% (Phase 4: 23/23, full regression: 99/99)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "seed_data_creation": "No persistent seeds. Each test self-registers fresh buyer+seller via random 10-digit mobiles, creates an item, makes an accepted connection, and tears down implicitly. Concurrent double-accept uses asyncio.run + httpx.AsyncClient to fire two real HTTP requests against the public ingress in parallel.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 4 suite at /app/backend/tests/test_phase4_inventory_reservation.py. Helpers: make_connected_pair(s, item_kwargs={}) returns dict(b_token/b_user/s_token/s_user/item); place_order(s, cp, qty, item_id?); fetch_item(s, seller_token, item_id) re-reads from /seller/items to get latest avail+reserved. Concurrent test pattern: `asyncio.run(asyncio.gather(client.post(...), client.post(...)))` inside an httpx.AsyncClient — proves the atomic find_one_and_update on orderStatus is race-safe. Combined regression command: `pytest /app/backend/tests/ -v` → 99 passing in ~60s. Backend reachable at $EXPO_PUBLIC_BACKEND_URL/api; mock OTP=123456.",
+  "rca_of_issue": "N/A — Phase 4 implementation fully matches the spec; no bugs reproduced."
+}
