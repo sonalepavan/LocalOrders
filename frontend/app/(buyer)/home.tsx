@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { BackHandler, FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { ActivityIndicator, Appbar, Banner, Card, Chip, FAB, Snackbar, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -31,6 +31,21 @@ export default function BuyerDashboard() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // Android hardware back on Home → logout and go to Login (replace, no back-stack)
+  useFocusEffect(
+    useCallback(() => {
+      const onBack = () => {
+        (async () => {
+          await signOut();
+          router.replace("/login");
+        })();
+        return true; // prevent default (which would re-enter the index.tsx loading loop)
+      };
+      const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+      return () => sub.remove();
+    }, [signOut]),
+  );
+
   if (!user) return null;
 
   const accepted = connections.filter((c) => c.status === "Accepted");
@@ -38,7 +53,7 @@ export default function BuyerDashboard() {
 
   const onLogout = async () => {
     await signOut();
-    router.replace("/");
+    router.replace("/login");
   };
 
   return (
