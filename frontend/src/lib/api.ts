@@ -115,6 +115,12 @@ export const api = {
   unitTypes: () => request<{ unitTypes: string[] }>("/meta/unit-types"),
 
   // ----- Phase 2: connections & orders -----
+  searchSellers: (q: string) =>
+    request<{ sellers: SellerSearchResult[] }>(
+      `/buyer/sellers/search?q=${encodeURIComponent(q)}`,
+      {},
+      true,
+    ),
   requestConnection: (sellerCode: string) =>
     request<{ connection: Connection }>("/buyer/connections", {
       method: "POST",
@@ -213,6 +219,20 @@ export type AppNotification = {
   data: Record<string, any>;
   readAt: string | null;
   createdDate: string;
+};
+
+export type SellerSearchResult = {
+  userId: string;
+  businessName: string | null;
+  sellerCode: string | null;
+  firstName: string;
+  lastName: string;
+  mobileNumber: string;
+  address: string;
+  pincode: string;
+  availabilityStatus?: "Open" | "Closed";
+  connectionStatus: "Pending" | "Accepted" | null;
+  connectionId: string | null;
 };
 
 export type ConnectionStatus = "Pending" | "Accepted" | "Rejected" | "Expired";

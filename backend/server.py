@@ -756,6 +756,60 @@ class CreateOrderRequest(BaseModel):
     items: List[OrderItemInput]
 
 
+# ---------- buyer: search sellers ----------
+
+@api_router.get("/buyer/sellers/search")
+async def search_sellers(q: Optional[str] = None, user: dict = Depends(current_user)):
+    """Unified search for sellers by sellerCode (contains), businessName (contains),
+    address (contains), or pincode (contains). Case-insensitive."""
+    ensure_buyer(user)
+    q_raw = (q or "").strip()
+    if len(q_raw) < 1:
+        return {"sellers": []}
+    # Escape regex special chars to prevent injection / invalid patterns
+    pattern = re.escape(q_raw)
+    regex = {"$regex": pattern, "$options": "i"}
+    mongo_q = {
+        "userType": "seller",
+        "userId": {"$ne": user["userId"]},
+        "$or": [
+            {"sellerCode": regex},
+            {"businessName": regex},
+            {"address": regex},
+            {"pincode": regex},
+        ],
+    }
+    sellers = await db.users.find(mongo_q, {"_id": 0}).limit(50).to_list(50)
+    # Bulk-fetch current buyer's existing connections for status annotation
+    seller_ids = [s["userId"] for s in sellers]
+    existing_conns = await db.buyer_seller_connections.find(
+        {
+            "buyerId": user["userId"],
+            "sellerId": {"$in": seller_ids},
+            "status": {"$in": ["Pending", "Accepted"]},
+        },
+        {"_id": 0, "sellerId": 1, "status": 1, "connectionId": 1},
+    ).to_list(1000)
+    conn_by_seller = {c["sellerId"]: c for c in existing_conns}
+    out = []
+    for s in sellers:
+        c = conn_by_seller.get(s["userId"])
+        out.append({
+            "userId": s["userId"],
+            "businessName": s.get("businessName"),
+            "sellerCode": s.get("sellerCode"),
+            "firstName": s.get("firstName", ""),
+            "lastName": s.get("lastName", ""),
+            "mobileNumber": s.get("mobileNumber", ""),
+            "address": s.get("address", ""),
+            "pincode": s.get("pincode", ""),
+            "availabilityStatus": s.get("availabilityStatus", "Open"),
+            "connectionStatus": c["status"] if c else None,
+            "connectionId": c["connectionId"] if c else None,
+        })
+    return {"sellers": out}
+
+
 # ---------- buyer: connections ----------
 
 @api_router.post("/buyer/connections")
