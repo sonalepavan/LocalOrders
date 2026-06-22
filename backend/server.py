@@ -679,6 +679,7 @@ def seller_summary(user: dict) -> dict:
         "firstName": user["firstName"],
         "lastName": user["lastName"],
         "mobileNumber": user["mobileNumber"],
+        "address": user.get("address", ""),
         "pincode": user.get("pincode", ""),
         "availabilityStatus": user.get("availabilityStatus", "Open"),
     }

@@ -110,6 +110,15 @@ export default function BuyerDashboard() {
             >
               <Card.Content>
                 <Text variant="titleMedium" style={{ fontWeight: "700" }}>{item.seller?.businessName || "Seller"}</Text>
+                {item.seller?.address ? (
+                  <Text
+                    variant="bodySmall"
+                    style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}
+                    testID={`seller-address-${item.sellerId}`}
+                  >
+                    {item.seller.address}
+                  </Text>
+                ) : null}
                 <View style={styles.row}>
                   <Chip compact style={styles.chip} icon="barcode">{item.seller?.sellerCode}</Chip>
                   {item.seller?.pincode ? <Chip compact style={styles.chip} icon="map-marker">{item.seller.pincode}</Chip> : null}

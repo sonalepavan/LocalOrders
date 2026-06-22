@@ -243,6 +243,7 @@ export type SellerSummary = {
   firstName: string;
   lastName: string;
   mobileNumber: string;
+  address: string;
   pincode: string;
   availabilityStatus?: "Open" | "Closed";
 };
