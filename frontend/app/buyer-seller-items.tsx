@@ -5,16 +5,19 @@ import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, IconButt
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { SellerItem, SellerSummary, api } from "@/src/lib/api";
-import { Cart, getCart, saveCart, validateLineQty } from "@/src/lib/cart";
+import { Cart, clearCart, getCart, saveCart, validateLineQty } from "@/src/lib/cart";
+import { useNetwork } from "@/src/lib/network";
 
 export default function BuyerSellerItems() {
   const { sellerId } = useLocalSearchParams<{ sellerId: string }>();
   const theme = useTheme();
+  const { online } = useNetwork();
   const [seller, setSeller] = useState<SellerSummary | null>(null);
   const [items, setItems] = useState<SellerItem[]>([]);
   const [cart, setCart] = useState<Cart | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [placing, setPlacing] = useState(false);
   const [snack, setSnack] = useState("");
   // Per-item selected quantity (defaults to MOQ when items load)
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
@@ -141,10 +144,36 @@ export default function BuyerSellerItems() {
   };
 
   const onPlaceOrderNow = async (item: SellerItem) => {
+    if (placing) return;
     const updated = await addSelectedToCart(item);
     if (!updated) return;
-    // Reuse existing Cart + Place Order flow by signalling auto-place via route param.
-    router.push({ pathname: "/buyer-cart", params: { autoPlace: "1" } });
+    // Place the order directly using the SAME workflow as /buyer-cart's
+    // placeOrder (api.createOrder + clearCart). This avoids the brief Cart
+    // screen flash while reusing all existing validation, inventory
+    // reservation and notification logic on the backend. No new APIs, no
+    // duplicated business rules.
+    if (!online) {
+      setSnack("Order placement requires an internet connection");
+      return;
+    }
+    for (const l of updated.lines) {
+      const err = validateLineQty(l);
+      if (err) { setSnack(err); return; }
+    }
+    setPlacing(true);
+    try {
+      const { order } = await api.createOrder(
+        updated.sellerId,
+        updated.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+      );
+      await clearCart();
+      setCart(null);
+      router.push({ pathname: "/buyer-order-detail", params: { orderId: order.orderId } });
+    } catch (e: any) {
+      setSnack(e?.message || "Failed to place order");
+    } finally {
+      setPlacing(false);
+    }
   };
 
   return (
@@ -256,7 +285,8 @@ export default function BuyerSellerItems() {
                     mode="contained"
                     icon="flash"
                     onPress={() => onPlaceOrderNow(item)}
-                    disabled={disabled}
+                    disabled={disabled || placing}
+                    loading={placing}
                     style={{ marginTop: 8, borderRadius: 12 }}
                     testID={`place-order-now-${item.itemId}`}
                   >

@@ -1,0 +1,40 @@
+{
+  "summary": "Verified the Place-Order-Now UX regression fix in /app/frontend/app/buyer-seller-items.tsx end-to-end. Backend regression (9/9) + Playwright UI (mobile viewport 390x844) all PASS. (1) Tapping place-order-now-{itemId} on /buyer-seller-items now goes DIRECTLY to /buyer-order-detail — URL trail captured during the tap was exactly ['/buyer-seller-items', '/buyer-order-detail'] with NO /buyer-cart frame in between (no Cart screen flash). (2) Back from /buyer-order-detail returns to /buyer-seller-items, confirming /buyer-cart was never pushed onto the navigation stack. (3) Cart badge gone on /buyer-seller-items and /buyer-cart shows 'Your cart is empty' after the order. (4) Existing Add-to-Cart→cart→place-order-btn flow is UNCHANGED: still pushes /buyer-cart, places the order via the same POST /api/buyer/orders endpoint, clears the cart, and replaces to /buyer-order-detail. (5) Backend tests confirm both code paths post identical payloads to POST /api/buyer/orders → identical order shape (sellerId, buyerId, orderStatus='Requested', totalAmount, items[].itemId/quantity/pricePerUnit/itemTotal), no _id leak, validation rejects below-MOQ and above-available, seller receives an order_requested notification, and inventory availableQuantity decrements on seller-accept as before. Note: this backend has NO 'expiresAt' field on orders (expiry is computed via requestedDateTime + ORDER_EXPIRY_HOURS=24); the review request text mentions 'expiresAt set' which is not the actual field name in this codebase — see action_items.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_buyer_place_order_now.py",
+    "/app/backend/tests/test_place_order_now_side_effects.py",
+    "/app/backend/tests/setup_cart_badge_fixture.py",
+    "/app/test_reports/pytest/place_order_now_full.xml"
+  ],
+  "action_items": [
+    "(Doc-only, optional) The review_request's 'expiresAt set' bullet doesn't match this backend's actual order schema — orders have 'requestedDateTime' and an implicit 24h ORDER_EXPIRY_HOURS instead of an explicit expiresAt field. Either add expiresAt to the order document (server.py ~line 1030 create_order) or update internal docs/playbook to reference requestedDateTime + ORDER_EXPIRY_HOURS. NOT a regression from this fix.",
+    "(Pre-existing, non-blocking) Backend logs spam 401 Unauthorized for EMERGENT_PUSH_KEY on every order placement — push notifications fail silently as intended but log noise persists.",
+    "(Pre-existing, non-blocking) Expo SDK package version drift warning at startup: expo@54.0.34 vs ~54.0.35, expo-font@14.0.11 vs ~14.0.12, expo-router@6.0.23 vs ~6.0.24."
+  ],
+  "critical_code_review_comments": [
+    "onPlaceOrderNow in buyer-seller-items.tsx (lines 146-177) correctly reuses ALL the existing helpers from /buyer-cart's placeOrder: addSelectedToCart (which calls validateLineQty), the online check, api.createOrder, clearCart. No new APIs, no duplicated business logic. ✓",
+    "router.push('/buyer-order-detail', { orderId }) (line 171) — slightly different from cart's router.replace which uses 'replace' (line 84 of buyer-cart.tsx). Because no /buyer-cart was pushed in this flow, 'push' is correct — it lets the buyer go BACK to /buyer-seller-items as expected. Cart path keeps 'replace' since it needs to pop /buyer-cart off the stack. Both choices are deliberate.",
+    "The autoPlace=1 codepath in /buyer-cart (lines 31-38) is dead code now that Place Order Now no longer routes via /buyer-cart. Not a bug — main agent intentionally left it untouched to keep the diff to a single file. Consider removing in a follow-up cleanup.",
+    "validateLineQty is called twice for Place-Order-Now path (once inside addSelectedToCart, once again in the for-loop on lines 159-162). Functionally fine — idempotent validation — but slightly redundant. Acceptable trade-off for parity with cart's placeOrder logic.",
+    "setPlacing(true) is only inside the createOrder try (line 163), but addSelectedToCart runs BEFORE setPlacing. If addSelectedToCart awaits cart save then user double-taps, placing is still false during the race window. Minor — the button's disabled={disabled || placing} guards re-entry only after setPlacing fires. In practice the await chain is fast and the early-return `if (placing) return;` on line 147 catches the obvious re-tap. Not a regression."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_place_order_now_side_effects.py (new regression — verifies notification + reservation parity + shape parity)"
+  ],
+  "success_rate": {
+    "backend": "100% — 9/9 (6 in test_buyer_place_order_now.py + 3 in test_place_order_now_side_effects.py)",
+    "frontend": "100% — all 9 UX assertions from review_request verified via Playwright"
+  },
+  "seed_data_creation": "Re-used the existing /app/backend/tests/setup_cart_badge_fixture.py seeder. Run: `python /app/backend/tests/setup_cart_badge_fixture.py` to register a fresh buyer (PIN 1234), fresh seller (TEST Cart Badge Shop), accepted connection, and 2 active items (avail=100). Prints JSON with buyer_mobile + seller_id + itemIds for Playwright to consume.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To re-validate the Place-Order-Now UX fix: (1) seed via `python /app/backend/tests/setup_cart_badge_fixture.py`; (2) run `EXPO_PUBLIC_BACKEND_URL=https://local-orders-deploy.preview.emergentagent.com pytest /app/backend/tests/test_buyer_place_order_now.py /app/backend/tests/test_place_order_now_side_effects.py -v` — should be 9/9 PASS; (3) for UI, attach a page.on('framenavigated', ...) listener BEFORE the place-order-now tap and assert no URL in the trail contains '/buyer-cart' between '/buyer-seller-items' and '/buyer-order-detail'. The login flow uses testIDs login-mobile-input + login-pin-input + login-submit-btn with PIN '1234'. Buyer mobile from current seed: 9581843878 (will change on each seeder run).",
+  "rca_of_issue": "Original RCA (already fixed by main agent): onPlaceOrderNow called addSelectedToCart() + router.push('/buyer-cart?autoPlace=1'). The Cart screen mounted, ran useFocusEffect, triggered placeOrder, and only then replaced to /buyer-order-detail — that brief mount of /buyer-cart was the visible flash. FIX: onPlaceOrderNow now inlines the same building blocks (validateLineQty per line, online check, api.createOrder, clearCart, router.push to /buyer-order-detail) directly in /buyer-seller-items.tsx, skipping the cart screen entirely. The /buyer-cart placeOrder path is intentionally untouched so Add-to-Cart users still see and use the cart. Verification: framenavigated listener captured only ['/buyer-seller-items?sellerId=…', '/buyer-order-detail?orderId=…'] with no intermediate /buyer-cart entry."
+}
