@@ -1,5 +1,5 @@
-import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useCallback, useRef, useState } from "react";
 import { FlatList, StyleSheet, View } from "react-native";
 import { ActivityIndicator, Appbar, Button, Card, Divider, IconButton, Snackbar, Surface, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -11,10 +11,12 @@ import { useNetwork } from "@/src/lib/network";
 export default function BuyerCart() {
   const theme = useTheme();
   const { online } = useNetwork();
+  const { autoPlace } = useLocalSearchParams<{ autoPlace?: string }>();
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
   const [snack, setSnack] = useState("");
+  const autoPlacedRef = useRef(false);
 
   const load = useCallback(async () => {
     const c = await getCart();
@@ -23,6 +25,17 @@ export default function BuyerCart() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Auto-trigger Place Order when arriving via "Place Order Now" flow.
+  // Reuses the existing placeOrder() function below — no duplicated logic.
+  useFocusEffect(useCallback(() => {
+    if (autoPlace !== "1" || autoPlacedRef.current) return;
+    if (loading || placing) return;
+    if (!cart || cart.lines.length === 0) return;
+    autoPlacedRef.current = true;
+    placeOrder();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPlace, loading, placing, cart]));
 
   const updateQty = async (itemId: string, delta: number) => {
     if (!cart) return;

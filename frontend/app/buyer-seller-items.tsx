@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, View } from "react-native";
-import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, IconButton, Searchbar, Snackbar, Text, useTheme } from "react-native-paper";
+import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, IconButton, Searchbar, Snackbar, Text, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { SellerItem, SellerSummary, api } from "@/src/lib/api";
@@ -16,6 +16,8 @@ export default function BuyerSellerItems() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [snack, setSnack] = useState("");
+  // Per-item selected quantity (defaults to MOQ when items load)
+  const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -24,6 +26,10 @@ export default function BuyerSellerItems() {
       setSeller(s);
       setItems(list);
       setCart(c);
+      // Initialize quantities to each item's MOQ
+      const initial: Record<string, number> = {};
+      list.forEach((it) => { initial[it.itemId] = it.minimumOrderQuantity; });
+      setQtyMap(initial);
     } catch (e: any) {
       setSnack(e?.message || "Failed to load");
     } finally {
@@ -43,16 +49,37 @@ export default function BuyerSellerItems() {
   const sameSeller = !cart || cart.sellerId === sellerId;
   const isClosed = seller?.availabilityStatus === "Closed";
 
-  const addToCart = async (item: SellerItem) => {
+  const getQty = (item: SellerItem) => {
+    const q = qtyMap[item.itemId];
+    return typeof q === "number" ? q : item.minimumOrderQuantity;
+  };
+
+  const stepQty = (item: SellerItem, delta: 1 | -1) => {
+    const current = getQty(item);
+    const next = +(current + delta * item.unitIncrement).toFixed(6);
+    if (next < item.minimumOrderQuantity) {
+      setSnack(`Min ${item.minimumOrderQuantity} ${item.unitType}`);
+      return;
+    }
+    if (next > item.availableQuantity) {
+      setSnack(`Only ${item.availableQuantity} available`);
+      return;
+    }
+    setQtyMap((prev) => ({ ...prev, [item.itemId]: next }));
+  };
+
+  // Adds the selected quantity to the cart (replaces existing line's qty for this item),
+  // returning the updated cart on success or null on failure.
+  const addSelectedToCart = async (item: SellerItem): Promise<Cart | null> => {
     if (isClosed) {
       setSnack("Seller currently unavailable.");
-      return;
+      return null;
     }
     if (cart && cart.sellerId !== sellerId) {
       setSnack("Cart contains items from a different seller. Clear or place that order first.");
-      return;
+      return null;
     }
-    const qty = item.minimumOrderQuantity;
+    const qty = getQty(item);
     const err = validateLineQty({
       quantity: qty,
       minimumOrderQuantity: item.minimumOrderQuantity,
@@ -60,8 +87,8 @@ export default function BuyerSellerItems() {
       availableQuantity: item.availableQuantity,
       itemName: item.itemName,
     });
-    if (err) { setSnack(err); return; }
-    const existing = cart || {
+    if (err) { setSnack(err); return null; }
+    const existing: Cart = cart || {
       sellerId,
       sellerName: seller?.businessName || "Seller",
       sellerCode: seller?.sellerCode || "",
@@ -69,9 +96,12 @@ export default function BuyerSellerItems() {
     };
     const idx = existing.lines.findIndex((l) => l.itemId === item.itemId);
     if (idx >= 0) {
-      const next = existing.lines[idx].quantity + item.unitIncrement;
-      if (next > item.availableQuantity) { setSnack(`Only ${item.availableQuantity} available`); return; }
-      existing.lines[idx] = { ...existing.lines[idx], quantity: next, availableQuantity: item.availableQuantity, pricePerUnit: item.pricePerUnit };
+      existing.lines[idx] = {
+        ...existing.lines[idx],
+        quantity: qty,
+        availableQuantity: item.availableQuantity,
+        pricePerUnit: item.pricePerUnit,
+      };
     } else {
       existing.lines.push({
         itemId: item.itemId,
@@ -86,7 +116,20 @@ export default function BuyerSellerItems() {
     }
     await saveCart(existing);
     setCart({ ...existing });
-    setSnack(`${item.itemName} added to cart`);
+    return existing;
+  };
+
+  const onAddToCart = async (item: SellerItem) => {
+    const updated = await addSelectedToCart(item);
+    if (!updated) return;
+    router.push("/buyer-cart");
+  };
+
+  const onPlaceOrderNow = async (item: SellerItem) => {
+    const updated = await addSelectedToCart(item);
+    if (!updated) return;
+    // Reuse existing Cart + Place Order flow by signalling auto-place via route param.
+    router.push({ pathname: "/buyer-cart", params: { autoPlace: "1" } });
   };
 
   return (
@@ -134,36 +177,80 @@ export default function BuyerSellerItems() {
               </Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <Card style={styles.card} testID={`browse-item-${item.itemId}`}>
-              <Card.Content>
-                <Text variant="titleMedium" style={{ fontWeight: "700" }}>{item.itemName}</Text>
-                <View style={styles.chipsRow}>
-                  <Chip compact style={styles.chip}>{item.unitType}</Chip>
-                  <Chip compact style={styles.chip}>₹{item.pricePerUnit}/{item.unitType}</Chip>
-                  <Chip compact style={styles.chip}>{item.availableQuantity} avail</Chip>
-                  {item.lowInventory && (
-                    <Chip compact icon="alert" style={{ backgroundColor: theme.colors.errorContainer }} textStyle={{ color: theme.colors.onErrorContainer }}>
-                      Low
-                    </Chip>
-                  )}
-                </View>
-                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>
-                  Min: {item.minimumOrderQuantity} · Step: {item.unitIncrement}
-                </Text>
-                <Button
-                  mode="contained-tonal"
-                  icon="cart-plus"
-                  onPress={() => addToCart(item)}
-                  disabled={!sameSeller || isClosed || item.availableQuantity < item.minimumOrderQuantity}
-                  style={{ marginTop: 12, borderRadius: 12 }}
-                  testID={`add-to-cart-${item.itemId}`}
-                >
-                  {isClosed ? "Unavailable" : "Add to Cart"}
-                </Button>
-              </Card.Content>
-            </Card>
-          )}
+          renderItem={({ item }) => {
+            const qty = getQty(item);
+            const disabled = !sameSeller || isClosed || item.availableQuantity < item.minimumOrderQuantity;
+            return (
+              <Card style={styles.card} testID={`browse-item-${item.itemId}`}>
+                <Card.Content>
+                  <Text variant="titleMedium" style={{ fontWeight: "700" }}>{item.itemName}</Text>
+                  <View style={styles.chipsRow}>
+                    <Chip compact style={styles.chip}>{item.unitType}</Chip>
+                    <Chip compact style={styles.chip}>₹{item.pricePerUnit}/{item.unitType}</Chip>
+                    <Chip compact style={styles.chip}>{item.availableQuantity} avail</Chip>
+                    {item.lowInventory && (
+                      <Chip compact icon="alert" style={{ backgroundColor: theme.colors.errorContainer }} textStyle={{ color: theme.colors.onErrorContainer }}>
+                        Low
+                      </Chip>
+                    )}
+                  </View>
+                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>
+                    Min: {item.minimumOrderQuantity} · Step: {item.unitIncrement}
+                  </Text>
+
+                  <Divider style={{ marginVertical: 12 }} />
+
+                  <View style={styles.qtyRow}>
+                    <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>Quantity</Text>
+                    <View style={styles.stepper}>
+                      <IconButton
+                        icon="minus"
+                        mode="outlined"
+                        onPress={() => stepQty(item, -1)}
+                        disabled={disabled || qty <= item.minimumOrderQuantity}
+                        testID={`item-dec-${item.itemId}`}
+                      />
+                      <Text
+                        variant="titleMedium"
+                        style={{ minWidth: 56, textAlign: "center", fontWeight: "700" }}
+                        testID={`item-qty-${item.itemId}`}
+                      >
+                        {qty}
+                      </Text>
+                      <IconButton
+                        icon="plus"
+                        mode="outlined"
+                        onPress={() => stepQty(item, 1)}
+                        disabled={disabled || qty + item.unitIncrement > item.availableQuantity}
+                        testID={`item-inc-${item.itemId}`}
+                      />
+                    </View>
+                  </View>
+
+                  <Button
+                    mode="contained-tonal"
+                    icon="cart-plus"
+                    onPress={() => onAddToCart(item)}
+                    disabled={disabled}
+                    style={{ marginTop: 8, borderRadius: 12 }}
+                    testID={`add-to-cart-${item.itemId}`}
+                  >
+                    {isClosed ? "Unavailable" : "Add to Cart"}
+                  </Button>
+                  <Button
+                    mode="contained"
+                    icon="flash"
+                    onPress={() => onPlaceOrderNow(item)}
+                    disabled={disabled}
+                    style={{ marginTop: 8, borderRadius: 12 }}
+                    testID={`place-order-now-${item.itemId}`}
+                  >
+                    Place Order Now
+                  </Button>
+                </Card.Content>
+              </Card>
+            );
+          }}
         />
       )}
 
@@ -180,4 +267,6 @@ const styles = StyleSheet.create({
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   chip: {},
   badge: { position: "absolute", top: 4, right: 4 },
+  qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  stepper: { flexDirection: "row", alignItems: "center" },
 });
