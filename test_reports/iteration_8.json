@@ -1,0 +1,29 @@
+{
+  "summary": "Verified the NotificationBell unread-badge refresh fix end-to-end. Backend pytest (5/5 passing) confirms unread-count / mark single read / mark-all-read math; Playwright UI run on the buyer home screen (testID 'buyer-home-bell') confirms badge shows '1' initially, disappears after mark-all-read + back navigation (useFocusEffect triggers api.unreadCount on focus). Backend GET /api/notifications/unread-count returned 0 after the flow. The fix in src/components/NotificationBell.tsx uses useFocusEffect from expo-router and is shared by all 5 bells (buyer-home, buyer-orders, seller-dashboard, seller-orders, seller-inventory), so the behavior applies everywhere.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_notifications_unread_flow.py",
+    "/app/test_reports/pytest/notifications_unread_flow.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "NotificationBell.tsx refresh() correctly guards on `online` and swallows errors; setInterval(30s) + AppState 'active' + useFocusEffect cover all relevant refresh triggers without redundant calls.",
+    "Render guard `{count > 0 && <Badge ... />}` properly hides the Badge when count is 0, satisfying Scenario C.",
+    "Note (pre-existing, not in scope): /api/register-push returns 500 because EMERGENT_PUSH_KEY is missing. Non-blocking but spams backend logs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_notifications_unread_flow.py (new test file)"
+  ],
+  "success_rate": { "backend": "100% (5/5)", "frontend": "100% (Scenario B/C/D verified on buyer-home-bell; same useFocusEffect path is reused by every NotificationBell instance)" },
+  "seed_data_creation": "Test registers a fresh TEST_ buyer + TEST_ seller per run (random 10-digit mobiles starting with 9, PIN 1234) and creates a connection_accepted notification by having buyer request connection + seller accept. All test data is prefixed with 'TEST'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "If you want broader coverage of the other 4 bell screens (buyer-orders, seller-dashboard, seller-orders, seller-inventory), the exact same Playwright flow can be reused — just change the testID from 'buyer-home-bell' to the target screen's bell and navigate to that screen after login. The underlying useFocusEffect runs identically for every NotificationBell mount.",
+  "rca_of_issue": "RCA (already fixed by main agent): NotificationBell only refreshed on mount, on AppState='active', and via a 30s setInterval. Going to /notifications, marking items read, then returning kept the bell mounted on the previous screen so its state was stale until the next interval tick. Fix: add useFocusEffect to re-call api.unreadCount() whenever the host screen regains focus. Verified: badge correctly transitions 1 → hidden immediately after returning from /notifications."
+}

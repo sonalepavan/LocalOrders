@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { AppState, StyleSheet, View } from "react-native";
 import { Badge, IconButton, useTheme } from "react-native-paper";
@@ -7,8 +7,10 @@ import { api } from "@/src/lib/api";
 import { useNetwork } from "@/src/lib/network";
 
 /**
- * Bell icon with an unread badge. Polls the unread-count endpoint on mount
- * and whenever the app returns to foreground. Tapping navigates to /notifications.
+ * Bell icon with an unread badge. Polls the unread-count endpoint on mount,
+ * whenever the host screen regains focus (e.g. after returning from
+ * /notifications where items may have been marked read), and when the app
+ * returns to foreground. Tapping navigates to /notifications.
  */
 export function NotificationBell({ testID = "notifications-bell" }: { testID?: string }) {
   const router = useRouter();
@@ -26,8 +28,16 @@ export function NotificationBell({ testID = "notifications-bell" }: { testID?: s
     }
   }, [online]);
 
+  // Refresh every time the host screen regains focus. This is what fixes the
+  // stale badge after the user reads notifications on the /notifications
+  // screen and navigates back.
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh]),
+  );
+
   useEffect(() => {
-    refresh();
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") refresh();
     });
