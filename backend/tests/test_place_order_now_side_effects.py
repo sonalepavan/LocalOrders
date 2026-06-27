@@ -3,8 +3,11 @@ posts to POST /api/buyer/orders: (1) seller's availableQuantity goes down by
 the ordered qty (reservation), and (2) seller receives an 'order_requested'
 notification. Also verifies that two orders posted with identical payload
 yield identical order shape (Place-Order-Now vs Add-to-Cart parity)."""
-import os, random, string
-import pytest, requests
+import os
+import random
+import string
+import pytest
+import requests
 
 BASE = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://local-orders-deploy.preview.emergentagent.com").rstrip("/")
 API = f"{BASE}/api"
@@ -28,7 +31,9 @@ def ctx():
           "otp": OTP, "businessName": f"TEST_{_rand()}"}
     r = s.post(f"{API}/auth/register/seller", json=sp, timeout=30)
     assert r.status_code in (200, 201), r.text
-    sd = r.json(); s_tok = sd["token"]; s_user = sd["user"]
+    sd = r.json()
+    s_tok = sd["token"]
+    s_user = sd["user"]
     s_hdr = {"Authorization": f"Bearer {s_tok}"}
     s.put(f"{API}/seller/availability", json={"status": "Open"}, headers=s_hdr, timeout=30)
     item = {"itemName": f"TEST_{_rand()}", "unitType": "Kg",
@@ -44,7 +49,9 @@ def ctx():
           "otp": OTP}
     r = s.post(f"{API}/auth/register/buyer", json=bp, timeout=30)
     assert r.status_code in (200, 201)
-    bd = r.json(); b_tok = bd["token"]; b_user = bd["user"]
+    bd = r.json()
+    b_tok = bd["token"]
+    b_user = bd["user"]
     b_hdr = {"Authorization": f"Bearer {b_tok}"}
     cr = s.post(f"{API}/buyer/connections", json={"sellerCode": s_user["sellerCode"]},
                 headers=b_hdr, timeout=30)
@@ -62,8 +69,11 @@ class TestPlaceOrderNowSideEffects:
         """Inventory reservation fires on seller-accept (existing behavior).
         Place-Order-Now and Add-to-Cart both create 'Requested' orders so this
         post-creation reservation step must continue to work for either flow."""
-        s = ctx["s"]; b_hdr = ctx["b_hdr"]; s_hdr = ctx["s_hdr"]
-        sid = ctx["sellerId"]; iid = ctx["item"]["itemId"]
+        s = ctx["s"]
+        b_hdr = ctx["b_hdr"]
+        s_hdr = ctx["s_hdr"]
+        sid = ctx["sellerId"]
+        iid = ctx["item"]["itemId"]
         before = s.get(f"{API}/buyer/sellers/{sid}/items", headers=b_hdr, timeout=30).json()
         avail_before = next(i for i in before["items"] if i["itemId"] == iid)["availableQuantity"]
         r = s.post(f"{API}/buyer/orders", headers=b_hdr, timeout=30,
@@ -78,8 +88,11 @@ class TestPlaceOrderNowSideEffects:
         assert avail_after == avail_before - 3, f"{avail_before} -> {avail_after}"
 
     def test_seller_receives_order_requested_notification(self, ctx):
-        s = ctx["s"]; b_hdr = ctx["b_hdr"]; s_hdr = ctx["s_hdr"]
-        sid = ctx["sellerId"]; iid = ctx["item"]["itemId"]
+        s = ctx["s"]
+        b_hdr = ctx["b_hdr"]
+        s_hdr = ctx["s_hdr"]
+        sid = ctx["sellerId"]
+        iid = ctx["item"]["itemId"]
         r = s.post(f"{API}/buyer/orders", headers=b_hdr, timeout=30,
                    json={"sellerId": sid, "items": [{"itemId": iid, "quantity": 1}]})
         assert r.status_code in (200, 201)
@@ -99,7 +112,10 @@ class TestPlaceOrderNowSideEffects:
     def test_two_identical_payloads_yield_identical_shape(self, ctx):
         """Add-to-Cart path and Place-Order-Now path both POST identical payloads to the
         same endpoint, so structurally the resulting orders must match (except ids/timestamps)."""
-        s = ctx["s"]; b_hdr = ctx["b_hdr"]; sid = ctx["sellerId"]; iid = ctx["item"]["itemId"]
+        s = ctx["s"]
+        b_hdr = ctx["b_hdr"]
+        sid = ctx["sellerId"]
+        iid = ctx["item"]["itemId"]
         payload = {"sellerId": sid, "items": [{"itemId": iid, "quantity": 2}]}
         r1 = s.post(f"{API}/buyer/orders", headers=b_hdr, json=payload, timeout=30)
         r2 = s.post(f"{API}/buyer/orders", headers=b_hdr, json=payload, timeout=30)
