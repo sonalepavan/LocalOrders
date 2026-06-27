@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, View } from "react-native";
 import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, IconButton, Searchbar, Snackbar, Text, useTheme } from "react-native-paper";
@@ -38,6 +38,21 @@ export default function BuyerSellerItems() {
   }, [sellerId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Re-sync the cart from storage whenever this screen regains focus
+  // (e.g. after returning from /buyer-cart where items may have been removed,
+  // the cart cleared, or an order placed). This keeps the cart badge in the
+  // header in sync with the actual cart state without re-fetching items.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const c = await getCart();
+        if (!cancelled) setCart(c);
+      })();
+      return () => { cancelled = true; };
+    }, []),
+  );
 
   const filtered = useMemo(() => {
     if (!query.trim()) return items;

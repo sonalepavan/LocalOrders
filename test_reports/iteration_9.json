@@ -1,0 +1,32 @@
+{
+  "summary": "Verified the cart-badge-sync fix in /app/frontend/app/buyer-seller-items.tsx end-to-end via Playwright UI. The new useFocusEffect re-reads getCart() from AsyncStorage whenever the screen regains focus, so the header Badge next to testID 'cart-btn' now correctly reflects cart.lines.length on every return to /buyer-seller-items. All 7 user scenarios (A clear-cart, B remove-line, C inc qty before add does not change badge, D place-order, E badge=1 after first add and badge=2 after two distinct items, F no Badge rendered when cart empty) verified PASS. Scenarios E_1 and E_2 were also confirmed via screenshot capture (cart icon shows '2' badge after adding 2 distinct items; see /tmp/cart_badge_E2.png).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/setup_cart_badge_fixture.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Render guard `{cartCount > 0 && <Badge style={styles.badge}>{cartCount}</Badge>}` correctly omits the Badge element when count is 0 (Scenario F). DOM inspection confirms no badge node is mounted while cart is empty.",
+    "useFocusEffect callback intentionally only re-reads the cart (not items) — minimal, no extra network calls. The cancelled flag is properly used to avoid state updates after unmount.",
+    "Pre-existing unrelated noise (out of scope): backend logs spam 401 for EMERGENT_PUSH_KEY on every /api/register-push and notification trigger; non-blocking.",
+    "Pre-existing unrelated noise: expo SDK package versions drift warning at startup (expo 54.0.34 vs expected 54.0.35, expo-font 14.0.11, expo-router 6.0.23). Non-blocking for this fix."
+  ],
+  "updated_files": [
+    "/app/backend/tests/setup_cart_badge_fixture.py (new fixture seeder used by Playwright)"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only fix, no backend changes)",
+    "frontend": "100% — 7/7 cart-badge scenarios verified (A,B,C,D,E_1,E_2,F)"
+  },
+  "seed_data_creation": "Seeder script /app/backend/tests/setup_cart_badge_fixture.py registers a fresh TEST_ buyer (PIN 1234), fresh TEST_ seller (businessName 'TEST Cart Badge Shop'), establishes a connection (buyer POST /api/buyer/connections → seller POST /api/seller/connections/{id}/accept), and creates 2 active inventory items (TEST Item 1, TEST Item 2, unitType=Kg, available=100). Random mobile numbers prevent collisions across runs. Prints JSON with buyer_mobile, seller_id, item IDs for the UI test to consume.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "If you need to re-validate the cart badge fix: run `python /app/backend/tests/setup_cart_badge_fixture.py` to seed a fresh buyer/seller/items, then use the Playwright flow in the message log. KEY DOM NOTE: the Badge is a sibling of the wrapper div that has data-testid='cart-btn-container' (auto-added by react-native-paper IconButton), NOT a sibling of [data-testid='cart-btn'] directly. To read the badge, walk up 2 levels from the cart-btn element. Also note that expo-router stack keeps multiple instances of /buyer-seller-items mounted in the DOM when navigating push() → back(); always scope selectors with ':visible' and use .last to grab the topmost instance.",
+  "rca_of_issue": "ROOT CAUSE (already fixed by main agent): /buyer-seller-items loaded its local `cart` state only once inside `useEffect(() => { load(); }, [load])` keyed on sellerId. The cart was mutated on /buyer-cart (remove, clear, placeOrder→clearCart) but the items screen never re-read AsyncStorage when refocused, so cartCount stayed stale and the Badge kept rendering '1' (or whatever the stale count was). FIX: added a `useFocusEffect` whose callback awaits `getCart()` on every screen focus and calls setCart(c). The existing render guard `{cartCount > 0 && <Badge>...}` then correctly hides the Badge when count is 0. Verification: after every scenario that empties the cart (A clear, B remove last line, D place order) the Badge DOM node is absent on return; after partial-clear scenarios with 1 or 2 lines the Badge text matches lines.length exactly."
+}
