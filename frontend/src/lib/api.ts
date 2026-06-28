@@ -140,7 +140,7 @@ export const api = {
       {},
       true,
     ),
-  createOrder: (sellerId: string, items: { itemId: string; quantity: number }[]) =>
+  createOrder: (sellerId: string, items: { itemId: string; quantity: number; customMessage?: string }[]) =>
     request<{ order: Order; items: OrderItem[] }>("/buyer/orders", {
       method: "POST",
       body: JSON.stringify({ sellerId, items }),
@@ -291,6 +291,9 @@ export type OrderItem = {
   unitType: string;
   pricePerUnit: number;
   itemTotal: number;
+  // Optional per-line note from the buyer. May be omitted/null on legacy
+  // order_items written before the Custom Message feature was introduced.
+  customMessage?: string | null;
 };
 
 export { ApiError };

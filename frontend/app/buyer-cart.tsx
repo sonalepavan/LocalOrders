@@ -1,11 +1,11 @@
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { FlatList, StyleSheet, View } from "react-native";
-import { ActivityIndicator, Appbar, Button, Card, Divider, IconButton, Snackbar, Surface, Text, useTheme } from "react-native-paper";
+import { ActivityIndicator, Appbar, Button, Card, Divider, IconButton, Snackbar, Surface, Text, TextInput, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api } from "@/src/lib/api";
-import { Cart, CartLine, cartTotal, clearCart, getCart, saveCart, validateLineQty } from "@/src/lib/cart";
+import { CUSTOM_MESSAGE_MAX_LENGTH, Cart, CartLine, cartTotal, clearCart, getCart, sanitizeCustomMessage, saveCart, validateLineQty } from "@/src/lib/cart";
 import { useNetwork } from "@/src/lib/network";
 
 export default function BuyerCart() {
@@ -58,6 +58,19 @@ export default function BuyerCart() {
     await saveCart(next.lines.length ? next : null);
   };
 
+  // Persist an edited custom message to both local state and storage.
+  // Stored as the raw user-typed string here so the cart input reflects
+  // exactly what the buyer typed; the backend trims & normalises on submit.
+  const updateMessage = async (itemId: string, text: string) => {
+    if (!cart) return;
+    const next = { ...cart, lines: cart.lines.map((l) => ({ ...l })) };
+    const idx = next.lines.findIndex((l) => l.itemId === itemId);
+    if (idx < 0) return;
+    next.lines[idx] = { ...next.lines[idx], customMessage: text };
+    setCart(next);
+    await saveCart(next);
+  };
+
   const onClear = async () => {
     await clearCart();
     setCart(null);
@@ -77,7 +90,13 @@ export default function BuyerCart() {
     try {
       const { order } = await api.createOrder(
         cart.sellerId,
-        cart.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+        cart.lines.map((l) => ({
+          itemId: l.itemId,
+          quantity: l.quantity,
+          // Sanitize on submit so trailing/leading whitespace never reaches
+          // the server, and blank entries are sent as undefined.
+          customMessage: sanitizeCustomMessage(l.customMessage),
+        })),
       );
       await clearCart();
       setCart(null);
@@ -131,7 +150,16 @@ export default function BuyerCart() {
         data={cart.lines}
         keyExtractor={(l) => l.itemId}
         contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
-        renderItem={({ item }) => <CartRow line={item} onInc={() => updateQty(item.itemId, +1)} onDec={() => updateQty(item.itemId, -1)} onRemove={() => removeLine(item.itemId)} />}
+        keyboardShouldPersistTaps="handled"
+        renderItem={({ item }) => (
+          <CartRow
+            line={item}
+            onInc={() => updateQty(item.itemId, +1)}
+            onDec={() => updateQty(item.itemId, -1)}
+            onRemove={() => removeLine(item.itemId)}
+            onMessageChange={(t) => updateMessage(item.itemId, t)}
+          />
+        )}
       />
       <Surface elevation={4} style={[styles.bottomBar, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.totalRow}>
@@ -156,7 +184,19 @@ export default function BuyerCart() {
   );
 }
 
-function CartRow({ line, onInc, onDec, onRemove }: { line: CartLine; onInc: () => void; onDec: () => void; onRemove: () => void }) {
+function CartRow({
+  line,
+  onInc,
+  onDec,
+  onRemove,
+  onMessageChange,
+}: {
+  line: CartLine;
+  onInc: () => void;
+  onDec: () => void;
+  onRemove: () => void;
+  onMessageChange: (text: string) => void;
+}) {
   const theme = useTheme();
   return (
     <Card style={{ marginBottom: 12, borderRadius: 16 }} testID={`cart-line-${line.itemId}`}>
@@ -179,6 +219,25 @@ function CartRow({ line, onInc, onDec, onRemove }: { line: CartLine; onInc: () =
           </View>
           <Text variant="titleMedium" style={{ fontWeight: "700" }}>₹{(line.quantity * line.pricePerUnit).toFixed(2)}</Text>
         </View>
+        <TextInput
+          label="Custom Message (Optional)"
+          placeholder="Add any special request or message for the seller"
+          value={line.customMessage || ""}
+          onChangeText={onMessageChange}
+          mode="outlined"
+          multiline
+          numberOfLines={3}
+          maxLength={CUSTOM_MESSAGE_MAX_LENGTH}
+          style={styles.msgInput}
+          testID={`cart-custom-message-${line.itemId}`}
+        />
+        <Text
+          variant="labelSmall"
+          style={{ color: theme.colors.onSurfaceVariant, textAlign: "right", marginTop: 2 }}
+          testID={`cart-custom-message-counter-${line.itemId}`}
+        >
+          {(line.customMessage || "").length}/{CUSTOM_MESSAGE_MAX_LENGTH}
+        </Text>
       </Card.Content>
     </Card>
   );
@@ -190,4 +249,5 @@ const styles = StyleSheet.create({
   totalRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   stepper: { flexDirection: "row", alignItems: "center" },
+  msgInput: { marginTop: 12, backgroundColor: "transparent" },
 });

@@ -1,11 +1,11 @@
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, View } from "react-native";
-import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, IconButton, Searchbar, Snackbar, Text, useTheme } from "react-native-paper";
+import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, IconButton, Searchbar, Snackbar, Text, TextInput, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { SellerItem, SellerSummary, api } from "@/src/lib/api";
-import { Cart, clearCart, getCart, saveCart, validateLineQty } from "@/src/lib/cart";
+import { CUSTOM_MESSAGE_MAX_LENGTH, Cart, clearCart, getCart, sanitizeCustomMessage, saveCart, validateLineQty } from "@/src/lib/cart";
 import { useNetwork } from "@/src/lib/network";
 
 export default function BuyerSellerItems() {
@@ -21,6 +21,9 @@ export default function BuyerSellerItems() {
   const [snack, setSnack] = useState("");
   // Per-item selected quantity (defaults to MOQ when items load)
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
+  // Per-item custom message. Preserved while the user stays on the screen so
+  // typing isn't lost when changing qty or interacting with other items.
+  const [msgMap, setMsgMap] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,6 +109,7 @@ export default function BuyerSellerItems() {
       itemName: item.itemName,
     });
     if (err) { setSnack(err); return null; }
+    const customMessage = sanitizeCustomMessage(msgMap[item.itemId]);
     const existing: Cart = cart || {
       sellerId,
       sellerName: seller?.businessName || "Seller",
@@ -119,6 +123,7 @@ export default function BuyerSellerItems() {
         quantity: qty,
         availableQuantity: item.availableQuantity,
         pricePerUnit: item.pricePerUnit,
+        customMessage,
       };
     } else {
       existing.lines.push({
@@ -130,6 +135,7 @@ export default function BuyerSellerItems() {
         unitIncrement: item.unitIncrement,
         availableQuantity: item.availableQuantity,
         quantity: qty,
+        customMessage,
       });
     }
     await saveCart(existing);
@@ -164,7 +170,7 @@ export default function BuyerSellerItems() {
     try {
       const { order } = await api.createOrder(
         updated.sellerId,
-        updated.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+        updated.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, customMessage: l.customMessage })),
       );
       await clearCart();
       setCart(null);
@@ -213,6 +219,7 @@ export default function BuyerSellerItems() {
           data={filtered}
           keyExtractor={(i) => i.itemId}
           contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text variant="titleMedium" style={{ marginBottom: 4 }}>No items found</Text>
@@ -271,6 +278,27 @@ export default function BuyerSellerItems() {
                     </View>
                   </View>
 
+                  <TextInput
+                    label="Custom Message (Optional)"
+                    placeholder="Add any special request or message for the seller"
+                    value={msgMap[item.itemId] || ""}
+                    onChangeText={(t) => setMsgMap((prev) => ({ ...prev, [item.itemId]: t }))}
+                    mode="outlined"
+                    multiline
+                    numberOfLines={3}
+                    maxLength={CUSTOM_MESSAGE_MAX_LENGTH}
+                    disabled={disabled}
+                    style={styles.msgInput}
+                    testID={`custom-message-input-${item.itemId}`}
+                  />
+                  <Text
+                    variant="labelSmall"
+                    style={{ color: theme.colors.onSurfaceVariant, textAlign: "right", marginTop: 2 }}
+                    testID={`custom-message-counter-${item.itemId}`}
+                  >
+                    {(msgMap[item.itemId] || "").length}/{CUSTOM_MESSAGE_MAX_LENGTH}
+                  </Text>
+
                   <Button
                     mode="contained-tonal"
                     icon="cart-plus"
@@ -314,4 +342,5 @@ const styles = StyleSheet.create({
   badge: { position: "absolute", top: 4, right: 4 },
   qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   stepper: { flexDirection: "row", alignItems: "center" },
+  msgInput: { marginTop: 12, backgroundColor: "transparent" },
 });

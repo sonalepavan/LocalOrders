@@ -1,5 +1,15 @@
 import { storage } from "@/src/utils/storage";
 
+export const CUSTOM_MESSAGE_MAX_LENGTH = 500;
+
+/** Normalize a buyer's custom message exactly the way the backend does:
+ *  trim whitespace and treat an empty string as "no message" (undefined). */
+export function sanitizeCustomMessage(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
 export type CartLine = {
   itemId: string;
   itemName: string;
@@ -9,6 +19,10 @@ export type CartLine = {
   unitIncrement: number;
   availableQuantity: number;
   quantity: number;
+  // Optional per-item buyer note to the seller. Stored trimmed (or omitted).
+  // Capped at CUSTOM_MESSAGE_MAX_LENGTH characters; older carts without this
+  // field continue to work since it is optional.
+  customMessage?: string;
 };
 
 export type Cart = {

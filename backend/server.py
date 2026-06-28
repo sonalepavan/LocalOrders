@@ -740,6 +740,10 @@ def order_item_public(doc: dict) -> dict:
         "unitType": doc["unitType"],
         "pricePerUnit": doc["pricePerUnit"],
         "itemTotal": doc["itemTotal"],
+        # Backward compatible: legacy order_items docs (pre-feature) have no
+        # `customMessage` key — surface as None so the field is always present
+        # in the API contract.
+        "customMessage": doc.get("customMessage"),
     }
 
 
@@ -747,9 +751,31 @@ class ConnectionRequest(BaseModel):
     sellerCode: str
 
 
+CUSTOM_MESSAGE_MAX_LENGTH = 500
+
+
 class OrderItemInput(BaseModel):
     itemId: str
     quantity: float
+    # Optional buyer-to-seller note for this line. Trimmed and capped at 500
+    # characters server-side; empty/whitespace-only is normalised to None so
+    # legacy orders (without the field) and intentionally-blank submissions
+    # are stored identically.
+    customMessage: Optional[str] = None
+
+    @field_validator("customMessage")
+    @classmethod
+    def trim_and_limit_message(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > CUSTOM_MESSAGE_MAX_LENGTH:
+            raise ValueError(
+                f"Custom message must be {CUSTOM_MESSAGE_MAX_LENGTH} characters or fewer"
+            )
+        return trimmed
 
 
 class CreateOrderRequest(BaseModel):
@@ -1020,6 +1046,10 @@ async def create_order(req: CreateOrderRequest, user: dict = Depends(current_use
             "unitType": item["unitType"],
             "pricePerUnit": item["pricePerUnit"],
             "itemTotal": item_total,
+            # Pydantic validator has already trimmed + length-checked this
+            # field. Stored as None when blank for consistent backward
+            # compatibility with pre-feature documents.
+            "customMessage": line.customMessage,
         })
 
     order_doc = {

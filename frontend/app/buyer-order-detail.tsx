@@ -179,19 +179,37 @@ export default function OrderDetail() {
         </Surface>
 
         <Text variant="titleMedium" style={styles.section}>Items</Text>
-        {items.map((i) => (
-          <Card key={i.orderItemId} style={styles.card} testID={`order-item-${i.itemId}`}>
-            <Card.Content>
-              <View style={styles.row}>
-                <Text variant="titleMedium" style={{ fontWeight: "700", flex: 1 }}>{i.itemName}</Text>
-                <Text variant="titleMedium" style={{ fontWeight: "700" }}>₹{i.itemTotal.toFixed(2)}</Text>
-              </View>
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
-                {i.quantity} {i.unitType} × ₹{i.pricePerUnit}/{i.unitType}
-              </Text>
-            </Card.Content>
-          </Card>
-        ))}
+        {items.map((i) => {
+          const msg = (i.customMessage || "").trim();
+          return (
+            <Card key={i.orderItemId} style={styles.card} testID={`order-item-${i.itemId}`}>
+              <Card.Content>
+                <View style={styles.row}>
+                  <Text variant="titleMedium" style={{ fontWeight: "700", flex: 1 }}>{i.itemName}</Text>
+                  <Text variant="titleMedium" style={{ fontWeight: "700" }}>₹{i.itemTotal.toFixed(2)}</Text>
+                </View>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
+                  {i.quantity} {i.unitType} × ₹{i.pricePerUnit}/{i.unitType}
+                </Text>
+                <View style={styles.messageBlock} testID={`order-item-custom-message-${i.itemId}`}>
+                  <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                    Custom Message
+                  </Text>
+                  <Text
+                    variant="bodyMedium"
+                    style={{
+                      marginTop: 2,
+                      color: msg ? theme.colors.onSurface : theme.colors.onSurfaceVariant,
+                      fontStyle: msg ? "normal" : "italic",
+                    }}
+                  >
+                    {msg || "No custom message"}
+                  </Text>
+                </View>
+              </Card.Content>
+            </Card>
+          );
+        })}
 
         <Divider style={{ marginVertical: 16 }} />
         <View style={styles.row}>
@@ -316,4 +334,10 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   actions: { marginTop: 24, gap: 12 },
   actBtn: { borderRadius: 14 },
+  messageBlock: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(0,0,0,0.08)",
+  },
 });
