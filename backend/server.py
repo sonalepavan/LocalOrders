@@ -1376,6 +1376,463 @@ async def cancel_order(order_id: str, req: CancelOrderRequest, user: dict = Depe
     return {"order": order_public(fresh)}
 
 
+# ===================== Custom Requests ("Need Something Not Listed?") =====================
+#
+# Lightweight 1-buyer ↔ 1-seller request channel for items not in the seller's
+# catalog. Reuses the atomic find_one_and_update state-transition pattern from
+# orders, the notify_user notification helper, and the existing buyer↔seller
+# connection gating. No cart, no inventory, no order side-effects.
+
+CUSTOM_REQUEST_MIN_LEN = 5
+CUSTOM_REQUEST_MAX_LEN = 500
+CUSTOM_REQUEST_STATUSES = [
+    "SAVED",
+    "NEW_REQUEST",
+    "QUOTE_SENT",
+    "ACCEPTED",
+    "COMPLETED",
+    "REJECTED_BY_BUYER",
+    "REJECTED_BY_SELLER",
+]
+SELLER_MESSAGE_MAX_LEN = 500
+REJECTION_REASON_MAX_LEN = 500
+
+
+class CreateCustomRequestBody(BaseModel):
+    sellerId: str
+    requestDetails: str
+    send: bool = False  # True = NEW_REQUEST (send immediately), False = SAVED (draft)
+
+    @field_validator("requestDetails")
+    @classmethod
+    def validate_details(cls, v: str) -> str:
+        trimmed = (v or "").strip()
+        if len(trimmed) < CUSTOM_REQUEST_MIN_LEN or len(trimmed) > CUSTOM_REQUEST_MAX_LEN:
+            raise ValueError(
+                f"Request details must be {CUSTOM_REQUEST_MIN_LEN}-{CUSTOM_REQUEST_MAX_LEN} characters"
+            )
+        return trimmed
+
+
+class UpdateCustomRequestBody(BaseModel):
+    requestDetails: str
+
+    @field_validator("requestDetails")
+    @classmethod
+    def validate_details(cls, v: str) -> str:
+        trimmed = (v or "").strip()
+        if len(trimmed) < CUSTOM_REQUEST_MIN_LEN or len(trimmed) > CUSTOM_REQUEST_MAX_LEN:
+            raise ValueError(
+                f"Request details must be {CUSTOM_REQUEST_MIN_LEN}-{CUSTOM_REQUEST_MAX_LEN} characters"
+            )
+        return trimmed
+
+
+class SendQuoteBody(BaseModel):
+    quoteAmount: float
+    sellerMessage: Optional[str] = None
+
+    @field_validator("quoteAmount")
+    @classmethod
+    def positive_amount(cls, v: float) -> float:
+        if v is None or v <= 0:
+            raise ValueError("Quote amount must be greater than 0")
+        return float(v)
+
+    @field_validator("sellerMessage")
+    @classmethod
+    def trim_message(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        t = v.strip()
+        if not t:
+            return None
+        if len(t) > SELLER_MESSAGE_MAX_LEN:
+            raise ValueError(f"Seller message must be {SELLER_MESSAGE_MAX_LEN} characters or fewer")
+        return t
+
+
+class RejectCustomRequestBody(BaseModel):
+    rejectionReason: Optional[str] = None
+
+    @field_validator("rejectionReason")
+    @classmethod
+    def trim_reason(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        t = v.strip()
+        if not t:
+            return None
+        if len(t) > REJECTION_REASON_MAX_LEN:
+            raise ValueError(f"Rejection reason must be {REJECTION_REASON_MAX_LEN} characters or fewer")
+        return t
+
+
+def custom_request_public(doc: dict) -> dict:
+    return {
+        "requestId": doc["requestId"],
+        "buyerId": doc["buyerId"],
+        "sellerId": doc["sellerId"],
+        "requestDetails": doc["requestDetails"],
+        "status": doc["status"],
+        "quoteAmount": doc.get("quoteAmount"),
+        "sellerMessage": doc.get("sellerMessage"),
+        "rejectionReason": doc.get("rejectionReason"),
+        "completedAt": doc.get("completedAt"),
+        "createdAt": doc["createdAt"],
+        "updatedAt": doc["updatedAt"],
+    }
+
+
+async def _transition_custom_request(
+    request_id: str,
+    user: dict,
+    expected_statuses: List[str],
+    new_status: str,
+    extra: Optional[dict] = None,
+    party: Literal["buyer", "seller"] = "buyer",
+) -> dict:
+    """Atomically claim a custom-request status transition. Mirrors _transition_order.
+
+    Filter enforces ownership by either buyerId or sellerId depending on `party`.
+    Returns the fresh document or raises HTTPException with a precise reason.
+    """
+    set_payload: Dict[str, Any] = {"status": new_status, "updatedAt": utc_now_iso()}
+    if extra:
+        set_payload.update(extra)
+
+    filter_doc: Dict[str, Any] = {
+        "requestId": request_id,
+        "status": {"$in": expected_statuses},
+    }
+    if party == "seller":
+        filter_doc["sellerId"] = user["userId"]
+    else:
+        filter_doc["buyerId"] = user["userId"]
+
+    fresh = await db.custom_requests.find_one_and_update(
+        filter_doc,
+        {"$set": set_payload},
+        return_document=ReturnDocument.AFTER,
+    )
+    if fresh:
+        fresh.pop("_id", None)
+        return fresh
+
+    actual = await db.custom_requests.find_one({"requestId": request_id})
+    if not actual:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if party == "seller" and actual["sellerId"] != user["userId"]:
+        raise HTTPException(status_code=403, detail="Not your request")
+    if party == "buyer" and actual["buyerId"] != user["userId"]:
+        raise HTTPException(status_code=403, detail="Not your request")
+    raise HTTPException(
+        status_code=400,
+        detail=f"Cannot change status from '{actual['status']}' to '{new_status}'",
+    )
+
+
+# ---------- buyer routes ----------
+
+@api_router.post("/buyer/custom-requests", status_code=201)
+async def create_custom_request(req: CreateCustomRequestBody, user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    # Reuse existing connection gating — keeps requests 1:1 between connected pairs
+    await _ensure_accepted_connection(user["userId"], req.sellerId)
+    seller = await db.users.find_one({"userId": req.sellerId, "userType": "seller"}, {"_id": 0})
+    if not seller:
+        raise HTTPException(status_code=404, detail="Seller not found")
+
+    now = utc_now_iso()
+    status = "NEW_REQUEST" if req.send else "SAVED"
+    doc = {
+        "requestId": str(uuid.uuid4()),
+        "buyerId": user["userId"],
+        "sellerId": req.sellerId,
+        "requestDetails": req.requestDetails,
+        "status": status,
+        "quoteAmount": None,
+        "sellerMessage": None,
+        "rejectionReason": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    await db.custom_requests.insert_one(doc)
+
+    if status == "NEW_REQUEST":
+        await notify_user(
+            req.sellerId,
+            "custom_request_received",
+            "New custom request",
+            f"{user['firstName']} {user['lastName']} sent you a custom request.",
+            {"customRequestId": doc["requestId"], "buyerId": user["userId"]},
+        )
+
+    return {"request": custom_request_public(doc)}
+
+
+@api_router.get("/buyer/custom-requests")
+async def list_buyer_custom_requests(user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    docs = await db.custom_requests.find(
+        {"buyerId": user["userId"]}, {"_id": 0}
+    ).sort("createdAt", -1).to_list(1000)
+    seller_ids = list({d["sellerId"] for d in docs})
+    sellers = {
+        s["userId"]: s
+        for s in await db.users.find({"userId": {"$in": seller_ids}}, {"_id": 0}).to_list(1000)
+    }
+    return {
+        "requests": [
+            {
+                **custom_request_public(d),
+                "seller": seller_summary(sellers[d["sellerId"]]) if d["sellerId"] in sellers else None,
+            }
+            for d in docs
+        ]
+    }
+
+
+@api_router.get("/custom-requests/{request_id}")
+async def get_custom_request(request_id: str, user: dict = Depends(current_user)):
+    doc = await db.custom_requests.find_one({"requestId": request_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if user["userId"] not in (doc["buyerId"], doc["sellerId"]):
+        raise HTTPException(status_code=403, detail="Not your request")
+    counterparty: Optional[dict] = None
+    if user["userType"] == "buyer":
+        s = await db.users.find_one({"userId": doc["sellerId"]}, {"_id": 0})
+        if s:
+            counterparty = seller_summary(s)
+    else:
+        b = await db.users.find_one({"userId": doc["buyerId"]}, {"_id": 0})
+        if b:
+            counterparty = buyer_summary(b)
+    return {"request": custom_request_public(doc), "counterparty": counterparty}
+
+
+@api_router.put("/buyer/custom-requests/{request_id}")
+async def update_custom_request(
+    request_id: str,
+    body: UpdateCustomRequestBody,
+    user: dict = Depends(current_user),
+):
+    ensure_buyer(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["SAVED"],
+        new_status="SAVED",
+        extra={"requestDetails": body.requestDetails},
+        party="buyer",
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.delete("/buyer/custom-requests/{request_id}")
+async def delete_custom_request(request_id: str, user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    # Only SAVED drafts may be deleted (sent requests are immutable from the buyer side)
+    existing = await db.custom_requests.find_one(
+        {"requestId": request_id, "buyerId": user["userId"]}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if existing["status"] != "SAVED":
+        raise HTTPException(
+            status_code=400,
+            detail="Only saved drafts can be deleted",
+        )
+    await db.custom_requests.delete_one({"requestId": request_id, "buyerId": user["userId"]})
+    return {"ok": True}
+
+
+@api_router.post("/buyer/custom-requests/{request_id}/send")
+async def send_custom_request(request_id: str, user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["SAVED"],
+        new_status="NEW_REQUEST",
+        party="buyer",
+    )
+    await notify_user(
+        fresh["sellerId"],
+        "custom_request_received",
+        "New custom request",
+        f"{user['firstName']} {user['lastName']} sent you a custom request.",
+        {"customRequestId": request_id, "buyerId": user["userId"]},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/buyer/custom-requests/{request_id}/accept-quote")
+async def accept_quote(request_id: str, user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["QUOTE_SENT"],
+        new_status="ACCEPTED",
+        party="buyer",
+    )
+    await notify_user(
+        fresh["sellerId"],
+        "custom_request_accepted_by_buyer",
+        "Quote accepted",
+        f"{user['firstName']} {user['lastName']} accepted your quote.",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/buyer/custom-requests/{request_id}/reject-quote")
+async def reject_quote(request_id: str, user: dict = Depends(current_user)):
+    ensure_buyer(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["QUOTE_SENT"],
+        new_status="REJECTED_BY_BUYER",
+        party="buyer",
+    )
+    await notify_user(
+        fresh["sellerId"],
+        "custom_request_rejected_by_buyer",
+        "Quote rejected",
+        f"{user['firstName']} {user['lastName']} rejected your quote.",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+# ---------- seller routes ----------
+
+@api_router.get("/seller/custom-requests")
+async def list_seller_custom_requests(user: dict = Depends(current_user)):
+    ensure_seller(user)
+    # Sellers never see SAVED drafts (those are private to the buyer)
+    docs = await db.custom_requests.find(
+        {"sellerId": user["userId"], "status": {"$ne": "SAVED"}},
+        {"_id": 0},
+    ).sort("createdAt", -1).to_list(1000)
+    buyer_ids = list({d["buyerId"] for d in docs})
+    buyers = {
+        b["userId"]: b
+        for b in await db.users.find({"userId": {"$in": buyer_ids}}, {"_id": 0}).to_list(1000)
+    }
+    return {
+        "requests": [
+            {
+                **custom_request_public(d),
+                "buyer": buyer_summary(buyers[d["buyerId"]]) if d["buyerId"] in buyers else None,
+            }
+            for d in docs
+        ]
+    }
+
+
+@api_router.post("/seller/custom-requests/{request_id}/quote")
+async def send_quote(
+    request_id: str,
+    body: SendQuoteBody,
+    user: dict = Depends(current_user),
+):
+    ensure_seller(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["NEW_REQUEST"],
+        new_status="QUOTE_SENT",
+        extra={"quoteAmount": body.quoteAmount, "sellerMessage": body.sellerMessage},
+        party="seller",
+    )
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "custom_quote_received",
+        "Quote received",
+        f"{biz} sent a quote of ₹{body.quoteAmount:.2f}.",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/seller/custom-requests/{request_id}/accept")
+async def seller_accept_custom_request(request_id: str, user: dict = Depends(current_user)):
+    ensure_seller(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["NEW_REQUEST"],
+        new_status="ACCEPTED",
+        party="seller",
+    )
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "custom_request_accepted_by_seller",
+        "Request accepted",
+        f"{biz} accepted your custom request.",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/seller/custom-requests/{request_id}/reject")
+async def seller_reject_custom_request(
+    request_id: str,
+    body: RejectCustomRequestBody,
+    user: dict = Depends(current_user),
+):
+    ensure_seller(user)
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["NEW_REQUEST"],
+        new_status="REJECTED_BY_SELLER",
+        extra={"rejectionReason": body.rejectionReason},
+        party="seller",
+    )
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    body_txt = "Your custom request was rejected."
+    if body.rejectionReason:
+        body_txt = f"Your custom request was rejected. Reason: {body.rejectionReason}"
+    await notify_user(
+        fresh["buyerId"],
+        "custom_request_rejected_by_seller",
+        "Request rejected",
+        f"{biz}: {body_txt}",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/seller/custom-requests/{request_id}/complete")
+async def seller_complete_custom_request(request_id: str, user: dict = Depends(current_user)):
+    ensure_seller(user)
+    now = utc_now_iso()
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["ACCEPTED"],
+        new_status="COMPLETED",
+        extra={"completedAt": now},
+        party="seller",
+    )
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "custom_request_completed",
+        "Request completed",
+        f"{biz} marked your custom request as completed.",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(

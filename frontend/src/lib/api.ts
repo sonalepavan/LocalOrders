@@ -208,6 +208,58 @@ export const api = {
     ),
   markAllRead: () =>
     request<{ markedCount: number }>("/notifications/read-all", { method: "POST" }, true),
+
+  // ----- Custom Requests ("Need Something Not Listed?") -----
+  createCustomRequest: (sellerId: string, requestDetails: string, send: boolean) =>
+    request<{ request: CustomRequest }>("/buyer/custom-requests", {
+      method: "POST",
+      body: JSON.stringify({ sellerId, requestDetails, send }),
+    }, true),
+  listBuyerCustomRequests: () =>
+    request<{ requests: (CustomRequest & { seller: SellerSummary | null })[] }>(
+      "/buyer/custom-requests",
+      {},
+      true,
+    ),
+  getCustomRequest: (id: string) =>
+    request<{ request: CustomRequest; counterparty: BuyerSummary | SellerSummary | null }>(
+      `/custom-requests/${id}`,
+      {},
+      true,
+    ),
+  updateCustomRequest: (id: string, requestDetails: string) =>
+    request<{ request: CustomRequest }>(`/buyer/custom-requests/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ requestDetails }),
+    }, true),
+  deleteCustomRequest: (id: string) =>
+    request<{ ok: boolean }>(`/buyer/custom-requests/${id}`, { method: "DELETE" }, true),
+  sendCustomRequest: (id: string) =>
+    request<{ request: CustomRequest }>(`/buyer/custom-requests/${id}/send`, { method: "POST" }, true),
+  acceptQuote: (id: string) =>
+    request<{ request: CustomRequest }>(`/buyer/custom-requests/${id}/accept-quote`, { method: "POST" }, true),
+  rejectQuote: (id: string) =>
+    request<{ request: CustomRequest }>(`/buyer/custom-requests/${id}/reject-quote`, { method: "POST" }, true),
+  listSellerCustomRequests: () =>
+    request<{ requests: (CustomRequest & { buyer: BuyerSummary | null })[] }>(
+      "/seller/custom-requests",
+      {},
+      true,
+    ),
+  sellerSendQuote: (id: string, quoteAmount: number, sellerMessage?: string) =>
+    request<{ request: CustomRequest }>(`/seller/custom-requests/${id}/quote`, {
+      method: "POST",
+      body: JSON.stringify({ quoteAmount, sellerMessage: sellerMessage || null }),
+    }, true),
+  sellerAcceptCustomRequest: (id: string) =>
+    request<{ request: CustomRequest }>(`/seller/custom-requests/${id}/accept`, { method: "POST" }, true),
+  sellerRejectCustomRequest: (id: string, rejectionReason?: string) =>
+    request<{ request: CustomRequest }>(`/seller/custom-requests/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ rejectionReason: rejectionReason || null }),
+    }, true),
+  sellerCompleteCustomRequest: (id: string) =>
+    request<{ request: CustomRequest }>(`/seller/custom-requests/${id}/complete`, { method: "POST" }, true),
 };
 
 export type AppNotification = {
@@ -297,3 +349,29 @@ export type OrderItem = {
 };
 
 export { ApiError };
+
+export type CustomRequestStatus =
+  | "SAVED"
+  | "NEW_REQUEST"
+  | "QUOTE_SENT"
+  | "ACCEPTED"
+  | "COMPLETED"
+  | "REJECTED_BY_BUYER"
+  | "REJECTED_BY_SELLER";
+
+export type CustomRequest = {
+  requestId: string;
+  buyerId: string;
+  sellerId: string;
+  requestDetails: string;
+  status: CustomRequestStatus;
+  quoteAmount: number | null;
+  sellerMessage: string | null;
+  rejectionReason: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const CUSTOM_REQUEST_MIN_LEN = 5;
+export const CUSTOM_REQUEST_MAX_LEN = 500;
