@@ -144,6 +144,16 @@ export default function SellerDashboard() {
         <Button mode="contained" onPress={() => router.push("/seller-add-item")} icon="plus" style={{ marginTop: 16, borderRadius: 16 }} contentStyle={{ height: 52 }} testID="dashboard-add-item-btn">
           Add a new item
         </Button>
+        <Button
+          mode="outlined"
+          onPress={() => router.push("/seller-custom-requests")}
+          icon="message-text-outline"
+          style={{ marginTop: 12, borderRadius: 16 }}
+          contentStyle={{ height: 52 }}
+          testID="dashboard-custom-requests-btn"
+        >
+          Custom Requests
+        </Button>
       </ScrollView>
       <Snackbar visible={!!snack} onDismiss={() => setSnack("")} duration={2500}>{snack}</Snackbar>
     </SafeAreaView>

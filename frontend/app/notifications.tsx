@@ -21,6 +21,12 @@ const ICON_MAP: Record<string, string> = {
   connection_request: "account-plus-outline",
   connection_accepted: "account-check-outline",
   connection_rejected: "account-cancel-outline",
+  custom_request_received: "message-text-outline",
+  custom_quote_received: "cash-multiple",
+  custom_request_accepted_by_buyer: "check-circle-outline",
+  custom_request_rejected_by_buyer: "close-circle-outline",
+  custom_request_accepted_by_seller: "check-circle-outline",
+  custom_request_rejected_by_seller: "close-circle-outline",
 };
 
 export default function NotificationsScreen() {
@@ -81,6 +87,14 @@ export default function NotificationsScreen() {
     // Reflect optimistically
     setItems((prev) => prev.map((x) => x.notificationId === n.notificationId ? { ...x, readAt: x.readAt || new Date().toISOString() } : x));
     const orderId = n.data?.orderId;
+    const customRequestId = n.data?.customRequestId;
+    if (customRequestId) {
+      const pathname = user?.userType === "seller"
+        ? "/seller-custom-request-detail"
+        : "/buyer-custom-request-detail";
+      router.push({ pathname, params: { requestId: customRequestId } } as any);
+      return;
+    }
     if (orderId) {
       router.push({ pathname: "/buyer-order-detail", params: { orderId } } as any);
     }

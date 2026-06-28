@@ -228,6 +228,44 @@ export default function BuyerSellerItems() {
               </Text>
             </View>
           }
+          ListFooterComponent={
+            <Card style={[styles.card, { marginTop: 16, backgroundColor: theme.colors.surfaceVariant }]} testID="need-something-card">
+              <Card.Content>
+                <Text variant="titleMedium" style={{ fontWeight: "700" }}>
+                  Need Something Not Listed?
+                </Text>
+                <Text variant="bodyMedium" style={{ marginTop: 4, color: theme.colors.onSurfaceVariant }}>
+                  Can&apos;t find what you&apos;re looking for? Send a request directly to this seller.
+                </Text>
+                <Button
+                  mode="contained"
+                  icon="message-text"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/buyer-custom-request",
+                      params: {
+                        sellerId,
+                        sellerName: seller?.businessName || "Seller",
+                      },
+                    })
+                  }
+                  style={{ marginTop: 12, borderRadius: 12 }}
+                  testID="open-send-request-btn"
+                >
+                  Send Request
+                </Button>
+                <Button
+                  mode="outlined"
+                  icon="bookmark-outline"
+                  onPress={() => router.push("/buyer-saved-requests")}
+                  style={{ marginTop: 8, borderRadius: 12 }}
+                  testID="open-saved-requests-btn"
+                >
+                  My Saved Requests
+                </Button>
+              </Card.Content>
+            </Card>
+          }
           renderItem={({ item }) => {
             const qty = getQty(item);
             const disabled = !sameSeller || isClosed || item.availableQuantity < item.minimumOrderQuantity;
