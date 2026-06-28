@@ -1,12 +1,12 @@
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import {
   ActivityIndicator,
   Appbar,
   Card,
   Chip,
-  IconButton,
+  SegmentedButtons,
   Snackbar,
   Text,
   useTheme,
@@ -29,9 +29,14 @@ const STATUS_COLOR: Record<CustomRequestStatus, { bg: string; fg: string; label:
   NEW_REQUEST: { bg: "#FFF3E0", fg: "#A65B00", label: "Sent" },
   QUOTE_SENT: { bg: "#DBEAFE", fg: "#1A5276", label: "Quote received" },
   ACCEPTED: { bg: "#E8F5E9", fg: "#1B5E20", label: "Accepted" },
+  COMPLETED: { bg: "#DEF7EC", fg: "#03543F", label: "Completed" },
   REJECTED_BY_BUYER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by you" },
   REJECTED_BY_SELLER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by seller" },
 };
+
+// Active vs History grouping (buyer view)
+const ACTIVE_STATUSES: CustomRequestStatus[] = ["SAVED", "NEW_REQUEST", "QUOTE_SENT", "ACCEPTED"];
+const HISTORY_STATUSES: CustomRequestStatus[] = ["COMPLETED", "REJECTED_BY_BUYER", "REJECTED_BY_SELLER"];
 
 export default function BuyerSavedRequests() {
   const theme = useTheme();
@@ -39,6 +44,7 @@ export default function BuyerSavedRequests() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [snack, setSnack] = useState("");
+  const [tab, setTab] = useState<"active" | "history">("active");
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +65,11 @@ export default function BuyerSavedRequests() {
     setRefreshing(false);
   }, [load]);
 
+  const visible = useMemo(() => {
+    const set = tab === "active" ? ACTIVE_STATUSES : HISTORY_STATUSES;
+    return rows.filter((r) => set.includes(r.status));
+  }, [rows, tab]);
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={["top"]}>
       <Appbar.Header mode="small" elevated>
@@ -73,15 +84,27 @@ export default function BuyerSavedRequests() {
         </View>
       ) : (
         <FlatList
-          data={rows}
+          data={visible}
           keyExtractor={(r) => r.requestId}
           contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ListHeaderComponent={
+            <View style={{ marginBottom: 12 }}>
+              <SegmentedButtons
+                value={tab}
+                onValueChange={(v) => setTab(v as "active" | "history")}
+                buttons={[
+                  { value: "active", label: "Active", testID: "tab-active" },
+                  { value: "history", label: "History", testID: "tab-history" },
+                ]}
+              />
+            </View>
+          }
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text variant="titleMedium" style={{ marginBottom: 4 }}>
-                No requests yet
+                {tab === "active" ? "No active requests" : "No history yet"}
               </Text>
               <Text
                 variant="bodyMedium"
@@ -91,7 +114,9 @@ export default function BuyerSavedRequests() {
                   paddingHorizontal: 32,
                 }}
               >
-                Send a custom request to a seller from their items page.
+                {tab === "active"
+                  ? "Send a custom request to a seller from their items page."
+                  : "Completed and rejected requests will appear here."}
               </Text>
             </View>
           }

@@ -27,6 +27,7 @@ const ICON_MAP: Record<string, string> = {
   custom_request_rejected_by_buyer: "close-circle-outline",
   custom_request_accepted_by_seller: "check-circle-outline",
   custom_request_rejected_by_seller: "close-circle-outline",
+  custom_request_completed: "check-decagram",
 };
 
 export default function NotificationsScreen() {

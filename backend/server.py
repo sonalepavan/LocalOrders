@@ -1390,6 +1390,7 @@ CUSTOM_REQUEST_STATUSES = [
     "NEW_REQUEST",
     "QUOTE_SENT",
     "ACCEPTED",
+    "COMPLETED",
     "REJECTED_BY_BUYER",
     "REJECTED_BY_SELLER",
 ]
@@ -1477,6 +1478,7 @@ def custom_request_public(doc: dict) -> dict:
         "quoteAmount": doc.get("quoteAmount"),
         "sellerMessage": doc.get("sellerMessage"),
         "rejectionReason": doc.get("rejectionReason"),
+        "completedAt": doc.get("completedAt"),
         "createdAt": doc["createdAt"],
         "updatedAt": doc["updatedAt"],
     }
@@ -1803,6 +1805,29 @@ async def seller_reject_custom_request(
         "custom_request_rejected_by_seller",
         "Request rejected",
         f"{biz}: {body_txt}",
+        {"customRequestId": request_id},
+    )
+    return {"request": custom_request_public(fresh)}
+
+
+@api_router.post("/seller/custom-requests/{request_id}/complete")
+async def seller_complete_custom_request(request_id: str, user: dict = Depends(current_user)):
+    ensure_seller(user)
+    now = utc_now_iso()
+    fresh = await _transition_custom_request(
+        request_id,
+        user,
+        expected_statuses=["ACCEPTED"],
+        new_status="COMPLETED",
+        extra={"completedAt": now},
+        party="seller",
+    )
+    biz = user.get("businessName") or f"{user['firstName']} {user['lastName']}"
+    await notify_user(
+        fresh["buyerId"],
+        "custom_request_completed",
+        "Request completed",
+        f"{biz} marked your custom request as completed.",
         {"customRequestId": request_id},
     )
     return {"request": custom_request_public(fresh)}

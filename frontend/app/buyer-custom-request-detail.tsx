@@ -26,6 +26,7 @@ const STATUS_COLOR: Record<CustomRequestStatus, { bg: string; fg: string; label:
   NEW_REQUEST: { bg: "#FFF3E0", fg: "#A65B00", label: "Sent" },
   QUOTE_SENT: { bg: "#DBEAFE", fg: "#1A5276", label: "Quote received" },
   ACCEPTED: { bg: "#E8F5E9", fg: "#1B5E20", label: "Accepted" },
+  COMPLETED: { bg: "#DEF7EC", fg: "#03543F", label: "Completed" },
   REJECTED_BY_BUYER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by you" },
   REJECTED_BY_SELLER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by seller" },
 };
@@ -162,6 +163,7 @@ export default function BuyerCustomRequestDetail() {
 
         {(req.status === "QUOTE_SENT" ||
           req.status === "ACCEPTED" ||
+          req.status === "COMPLETED" ||
           req.status === "REJECTED_BY_BUYER") &&
           req.quoteAmount != null && (
             <>

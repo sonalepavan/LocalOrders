@@ -20,13 +20,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BuyerSummary, CustomRequest, CustomRequestStatus, api } from "@/src/lib/api";
 
-type Action = "quote" | "accept" | "reject" | null;
+type Action = "quote" | "accept" | "reject" | "complete" | null;
 
 const STATUS_COLOR: Record<CustomRequestStatus, { bg: string; fg: string; label: string }> = {
   SAVED: { bg: "#F3F4F6", fg: "#52525B", label: "Saved" },
   NEW_REQUEST: { bg: "#FFF3E0", fg: "#A65B00", label: "New" },
   QUOTE_SENT: { bg: "#DBEAFE", fg: "#1A5276", label: "Quote sent" },
   ACCEPTED: { bg: "#E8F5E9", fg: "#1B5E20", label: "Accepted" },
+  COMPLETED: { bg: "#DEF7EC", fg: "#03543F", label: "Completed" },
   REJECTED_BY_BUYER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by buyer" },
   REJECTED_BY_SELLER: { bg: "#FDECEA", fg: "#8C1D18", label: "Rejected by you" },
 };
@@ -92,6 +93,9 @@ export default function SellerCustomRequestDetail() {
       } else if (pending === "reject") {
         await api.sellerRejectCustomRequest(req.requestId, rejectionReason || undefined);
         setSnack("Request rejected");
+      } else if (pending === "complete") {
+        await api.sellerCompleteCustomRequest(req.requestId);
+        setSnack("Request marked as completed");
       }
       setPending(null);
       await load();
@@ -117,6 +121,7 @@ export default function SellerCustomRequestDetail() {
   const sc = STATUS_COLOR[req.status];
   const buyerName = buyer ? `${buyer.firstName} ${buyer.lastName}` : "Buyer";
   const canAct = req.status === "NEW_REQUEST";
+  const canComplete = req.status === "ACCEPTED";
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={["top"]}>
@@ -159,6 +164,7 @@ export default function SellerCustomRequestDetail() {
 
         {(req.status === "QUOTE_SENT" ||
           req.status === "ACCEPTED" ||
+          req.status === "COMPLETED" ||
           req.status === "REJECTED_BY_BUYER") &&
           req.quoteAmount != null && (
             <>
@@ -236,6 +242,21 @@ export default function SellerCustomRequestDetail() {
             </Button>
           </View>
         )}
+
+        {canComplete && (
+          <View style={styles.actions}>
+            <Button
+              mode="contained"
+              icon="check-decagram"
+              onPress={() => open("complete")}
+              contentStyle={{ height: 48 }}
+              style={styles.actBtn}
+              testID="mark-completed-btn"
+            >
+              Mark Completed
+            </Button>
+          </View>
+        )}
       </ScrollView>
 
       <Portal>
@@ -244,6 +265,7 @@ export default function SellerCustomRequestDetail() {
             {pending === "quote" && "Send Quote"}
             {pending === "accept" && "Accept this request?"}
             {pending === "reject" && "Reject this request?"}
+            {pending === "complete" && "Mark as completed?"}
           </Dialog.Title>
           <Dialog.Content>
             {pending === "quote" && (
@@ -278,6 +300,9 @@ export default function SellerCustomRequestDetail() {
             )}
             {pending === "accept" && (
               <Text>The buyer will be notified that you accepted their request.</Text>
+            )}
+            {pending === "complete" && (
+              <Text>The buyer will be notified that this request is completed.</Text>
             )}
             {pending === "reject" && (
               <TextInput

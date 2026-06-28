@@ -258,6 +258,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ rejectionReason: rejectionReason || null }),
     }, true),
+  sellerCompleteCustomRequest: (id: string) =>
+    request<{ request: CustomRequest }>(`/seller/custom-requests/${id}/complete`, { method: "POST" }, true),
 };
 
 export type AppNotification = {
@@ -353,6 +355,7 @@ export type CustomRequestStatus =
   | "NEW_REQUEST"
   | "QUOTE_SENT"
   | "ACCEPTED"
+  | "COMPLETED"
   | "REJECTED_BY_BUYER"
   | "REJECTED_BY_SELLER";
 
@@ -365,6 +368,7 @@ export type CustomRequest = {
   quoteAmount: number | null;
   sellerMessage: string | null;
   rejectionReason: string | null;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
