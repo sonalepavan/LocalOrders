@@ -1,0 +1,57 @@
+{
+  "summary": "LocalOrders Phase 5 (Notifications + Push framework) backend tested end-to-end via the public ingress. Created /app/backend/tests/test_phase5_notifications.py with 21 tests across 8 test classes; ALL 21/21 PASS. Full regression across Phase 1+2+3+4+5 = 120/120 PASS in ~78s (was 99/99 in Phase 4 — +21 new tests). Coverage details: (a) GET /api/ heartbeat returns {service:'LocalOrders API', phase:1}. (b) /api/notifications, /api/notifications/unread-count, /api/notifications/read-all all 401 without bearer token; fresh buyer has zero unread. (c) Connection lifecycle: POST /buyer/connections inserts a 'connection_request' notification for the seller only (not buyer); accept/reject emit 'connection_accepted' / 'connection_rejected' to the buyer with correct data.connectionId and data.sellerId payloads. (d) Order lifecycle (verified by reading-all first, performing the action, then asserting exactly one new unread of the expected type): buyer→order creates 'order_requested' on the seller; seller accept creates 'order_accepted' on the buyer; reject with reason creates 'order_rejected' carrying the reason inside body; buyer cancel creates 'order_cancelled' on the seller carrying the cancel reason; accept→deliver creates 'order_delivered' on the buyer. All notifications carry the correct data.orderId and orderNumber appears in the title. (e) Mark-read flows: POST /notifications/{id}/read returns the updated notification, decrements unread count by exactly 1, is idempotent (200 on second call), 404s for unknown ids, and 404s when a different user tries to read someone else's notification (no IDOR). POST /notifications/read-all returns markedCount equal to exactly the previously-unread count and is idempotent (second call returns 0). (f) Push relay 401 non-blocking proof: with EMERGENT_PUSH_KEY='placeholder' the upstream relay actually 401s on every event (verified in /var/log/supervisor/backend.err.log) yet every mutating endpoint still returns 2xx and the in-app row still lands — the unreadCount deltas match exactly what would be expected on a healthy push pipeline. (g) POST /api/register-push with body {user_id, platform, device_token} returns 500 with detail 'EMERGENT_PUSH_KEY missing or invalid' as documented (NOT a bug per the playbook — pipeline injects real key); missing fields return 422 from Pydantic. (h) Recursive _id scanner across every notification response confirms zero Mongo _id leakage.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/register-push",
+        "issue": "Endpoint has NO authentication dependency — any anonymous client can POST a {user_id, platform, device_token} and register an arbitrary device token against any user_id. With a real EMERGENT_PUSH_KEY this lets a malicious caller (a) hijack push delivery for any user_id they can enumerate (denial-of-notification by registering their own token in place of the victim's) and (b) flood the upstream relay's user-registration table. Recommend adding `user: dict = Depends(current_user)` and enforcing body.user_id == user['userId'] (or just drop user_id from the body entirely and read it from the token). Reference: /app/backend/server.py:554-570."
+      },
+      {
+        "endpoint": "module-level _push_client",
+        "issue": "_push_client is an httpx.AsyncClient created at import time with the X-Push-Key header baked into the constructor (line 47-51). When the deployment pipeline rotates EMERGENT_PUSH_KEY at runtime via env vars, the existing client keeps the stale key until the process restarts. Suggest reading the env var inside send_push() per call, or building the client lazily on first use. Reference: /app/backend/server.py:46-51."
+      },
+      {
+        "endpoint": "/api/notifications",
+        "issue": "Response uses 'createdDate' for the sort key but it's a string ISO timestamp (not a Date). String sort works for ISO-8601 UTC ('Z') values which utc_now_iso() emits, but a future code path that writes a non-Z timestamp would silently mis-sort. Either index the field or convert to a proper datetime. Cosmetic only — verified strictly descending for all current writers. Reference: /app/backend/server.py:591-593."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase5_notifications.py",
+    "/app/test_reports/pytest/phase5_results.xml",
+    "/app/test_reports/pytest/full_regression.xml"
+  ],
+  "action_items": [
+    "(Security, recommended before APK release) Add auth dependency to POST /api/register-push and enforce body.user_id == authenticated userId, otherwise an anonymous caller can hijack push delivery for any user once the real EMERGENT_PUSH_KEY is injected.",
+    "(Reliability) Build _push_client lazily (or read PUSH_KEY per-request) so a runtime env-var rotation by the deployment pipeline is picked up without a backend restart.",
+    "(Optional carry-over from iteration_4) Replace per-line update_one loops in _reserve/_restore/_clear with bulk_write for fewer round-trips on multi-line orders.",
+    "(Optional) server.py is now 1301 lines — consider splitting into routers/{auth,inventory,connections,orders,notifications,push}.py."
+  ],
+  "critical_code_review_comments": [
+    "notify_user wraps both the Mongo insert and the send_push call in try/except (server.py:97-100 and the broader try/except around send_push at 108+). Verified end-to-end: every mutating endpoint logs `Push notification failed (non-blocking): 500: EMERGENT_PUSH_KEY missing or invalid` in /var/log/supervisor/backend.err.log yet still returns 2xx and still persists the in-app row.",
+    "notification_public projects exactly notificationId/userId/type/title/body/data/readAt/createdDate — no _id leakage. The .find() also uses projection {_id: 0} and find_one_and_update pops _id defensively (server.py:616). Defense-in-depth is correct.",
+    "Mark-read uses find_one_and_update with userId in the filter (server.py:609-613). This naturally enforces ownership: a foreign user requesting notification_id of another user gets a 404, not a 403, which is correct (avoids existence-disclosure).",
+    "Order/connection notify_user calls all live AFTER the atomic Mongo write that mutates the canonical state, so an inserted notification always corresponds to a real state transition (no phantom notifications even if the transition handler errors later).",
+    "RegisterPushBody uses Pydantic with three required str fields — missing fields correctly return 422 (verified). Empty strings are accepted (no min_length=1) — would be worth tightening.",
+    "ORDER_STATUSES constant at server.py:634 is now correct (`['Requested','Accepted','Rejected','Cancelled','Delivered','Expired']`) — the 'Fulfilled' carry-over noted in iteration_3 is no longer present. ✓"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase5_notifications.py (CREATED — 21 tests, 8 test classes, 433 lines)"
+  ],
+  "success_rate": {
+    "backend": "100% (Phase 5: 21/21, full regression: 120/120)",
+    "frontend": "not tested (backend-only request per agent_to_agent_context_note)"
+  },
+  "seed_data_creation": "No persistent seeds. Each test self-registers fresh buyer+seller via random 10-digit mobiles, builds an Accepted connection, creates an item, drives the order lifecycle, and tears down implicitly. The push-non-blocking proof works by clearing notifications via /notifications/read-all then asserting unreadCount delta after each event.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 5 suite at /app/backend/tests/test_phase5_notifications.py. Helpers: register_buyer(s)/register_seller(s) (mock OTP 123456), connect_pair(s) returns dict(b_token/b_user/s_token/s_user/connectionId/item) for an Accepted connection with one Tomato/Kg item at 100 avail, place_order(s, cp, qty) submits a buyer order, list_notifs(s, token) and unread_count(s, token) read the notifications endpoints. Delta-based assertions (mark-all-read → action → assert unreadCount==prev+1) are the cleanest way to verify a specific notification was emitted without coupling to global ordering. The TestPushNonBlocking class is the canonical proof that push 401s do not break primary flows: every test in the suite implicitly exercises that path since the local pod has EMERGENT_PUSH_KEY='placeholder'. Combined regression command: `cd /app/backend && EXPO_PUBLIC_BACKEND_URL=$EXPO_PUBLIC_BACKEND_URL python -m pytest tests/ -v` → 120 passing in ~78s.",
+  "rca_of_issue": "N/A — Phase 5 implementation fully matches the spec; no bugs reproduced. The two security/reliability notes on /api/register-push and the module-level _push_client are pre-emptive recommendations for the production cutover, not active bugs."
+}

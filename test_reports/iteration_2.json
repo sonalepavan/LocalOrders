@@ -1,0 +1,42 @@
+{
+  "summary": "LocalOrders Phase 2 backend (Connections + Orders) tested end-to-end via the public ingress URL with a fresh 24-case pytest suite. ALL 24/24 pass. Coverage: connection creation (Pending result, 404 invalid code, 409 duplicate Pending/Accepted), role guards (seller hitting /buyer/* → 403, buyer hitting /seller/connections → 403), buyer/seller connection lists scope correctly with seller/buyer summaries, accept/reject by target seller (200 + approvedDateTime set), non-target seller accept → 404, idempotency of non-Pending → 400, reject flow, lazy 7-day expiry verified by directly aging requestedDateTime in MongoDB and re-reading, /buyer/sellers/{id}/items requires Accepted (403 otherwise) and supports ?q= regex search (only active items), order placement without Accepted connection → 403, qty validation (below min/misaligned/above available all 400), valid order creates OrderStatus='Requested' with auto-increment ORD-##### (≥100001) and monotonic +1 increments, totalAmount = qty*price, order_items document persists all 6 spec fields (orderItemId, orderId, itemId, itemName, quantity, unitType, pricePerUnit, itemTotal), buyer/seller order lists carry counterpart summaries, GET /api/orders/{id} accessible to both buyer & seller of that order, third-party user → 403, and zero Mongo _id leakage in any new endpoint response.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/seller/connections/{id}/accept|reject", "issue": "Returns 404 when called by a seller that is not the target seller of the connection. Acceptable (treats the row as not visible to this seller), but 403 'Not your connection' would be more precise. Behaviour is safe; test asserts 404 to match implementation."},
+      {"endpoint": "POST /api/buyer/orders", "issue": "Order is recorded with the current prices, but availableQuantity is NOT decremented on order creation. PRD explicitly lists 'Stock decrement on order creation' as out of scope for Phase 2 — flagged only as a forward-looking note."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_connections_orders.py",
+    "/app/test_reports/pytest/phase2_results.xml"
+  ],
+  "action_items": [
+    "No backend fixes required for Phase 2 acceptance. All spec behaviours verified.",
+    "Optional polish: change 404 → 403 when a non-target seller hits /seller/connections/{id}/accept|reject for clearer client-side error mapping.",
+    "When Phase 3 lands, add stock decrement on order creation and order status transitions (Accept/Fulfil/Cancel)."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 792 lines; Phase 3 should split into routers/connections.py and routers/orders.py + a models.py.",
+    "expire_stale_connections() is called on every read endpoint — fine functionally, but does an unconditional update_many on every list call. Acceptable; consider a TTL index or a single background sweep for scale.",
+    "next_order_number() uses the same dual-call baseline-bump pattern as next_seller_code(); minor race window but safe at expected load.",
+    "Quantity increment check uses 1e-6 float tolerance against round(steps) — correctly catches 2.3 vs 2.5 with min=2 inc=0.5. Verified.",
+    "All Phase 2 endpoints project _id away via {'_id': 0} or go through the *_public/*_summary mappers; recursive _id scanner confirms zero leakage.",
+    "POST /buyer/orders correctly enforces Cart-belongs-to-one-seller at the route signature (single sellerId) and validates each line item resolves to that seller via the Mongo filter; tests confirm 404 fallback on cross-seller item ids."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_connections_orders.py (created)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "No persistent seeds. Each test class self-registers fresh buyers/sellers via random 10-digit mobiles; the 7-day expiry test directly mutates one connection's requestedDateTime in MongoDB then reverts behaviour by relying on lazy-expire which sets status='Expired'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 suite at /app/backend/tests/test_phase2_connections_orders.py reuses helpers (register_buyer/register_seller/create_item) and a module-scoped connected_pair fixture (Buyer ↔ Seller with Accepted connection + one Kg item: min=2, inc=0.5, price=25, avail=100). The lazy-expiry test connects to Mongo via MONGO_URL/DB_NAME from backend env — keep these envs present. Phase 1 suite (iteration_1) remains green; can be combined with `pytest /app/backend/tests/ -v` for full regression.",
+  "rca_of_issue": "N/A — Phase 2 implementation matches spec; no bugs reproduced."
+}

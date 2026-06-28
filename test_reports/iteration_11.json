@@ -1,0 +1,52 @@
+{
+  "summary": "Tested the per-item Custom Message feature end-to-end. BACKEND IMPLEMENTATION IS CORRECT: 7/7 pytest tests pass against the local supervisor backend at http://localhost:8001 (trim whitespace, whitespace→null, omitted→null, 501-char rejection 422, exactly 500-char accepted, buyer+seller both see message via GET /api/orders/{id}, legacy order_items doc without the field surfaces customMessage:null). FRONTEND CODE IS CORRECT: buyer-seller-items.tsx, buyer-cart.tsx, buyer-order-detail.tsx, src/lib/cart.ts and src/lib/api.ts are all wired up with the required testIDs (custom-message-input-<itemId>, cart-custom-message-<itemId>, cart-custom-message-counter-<itemId>, order-item-custom-message-<itemId>, custom-message-counter-<itemId>), maxLength=500, placeholder text, multiline, character counter, and the message flows through addToCart→cart storage→createOrder. CRITICAL ENVIRONMENT FINDING: the deploy preview URL https://local-orders-deploy.preview.emergentagent.com that EXPO_PUBLIC_BACKEND_URL points to is a SEPARATE/STALE backend deployment with its own MongoDB — same all-7 tests FAIL against preview (501-char returns 200 with the field silently dropped from items[], so OrderItemInput on the deployed pod does not yet declare customMessage). Restarting the local backend (sudo supervisorctl restart backend) had no effect on the preview URL because preview ≠ localhost:8001. This means the live web preview that buyers/sellers will use right now will SILENTLY DROP customMessage on POST /api/buyer/orders and never display it on order detail. Main agent must redeploy the backend to push this feature to the preview URL before declaring the story shippable. Frontend code itself does not need changes.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/buyer/orders (preview URL)", "issue": "Deploy preview backend at https://local-orders-deploy.preview.emergentagent.com is STALE — accepts 501-char customMessage with 200 and silently strips the field from items[] in both POST and GET /api/orders/{id} responses. Code is correct on /app/backend/server.py (verified against http://localhost:8001 — 7/7 pass) but the deployed pod has not been redeployed. Frontend points at the preview URL (frontend/.env EXPO_PUBLIC_BACKEND_URL) so end-users currently see customMessage silently dropped.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/buyer/orders", "issue": "Pre-existing log noise: every order placement emits 'Push notification failed (non-blocking): 500: EMERGENT_PUSH_KEY missing or invalid' for both seller and buyer notifications — not introduced by this feature, but spams backend.err.log."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Place Order with customMessage via web preview", "issue": "Because the deploy preview backend is stale (see backend_issues.critical), any UI flow that places an order via the live frontend will appear to succeed but the message will not persist. UI itself is correct — this is an environment/deploy issue, not a frontend code bug.", "affected_testIDs": ["custom-message-input-<itemId>", "cart-custom-message-<itemId>", "order-item-custom-message-<itemId>"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_custom_message.py",
+    "/app/test_reports/pytest/custom_message.xml"
+  ],
+  "action_items": [
+    "REDEPLOY the backend to the preview URL (https://local-orders-deploy.preview.emergentagent.com). Local /app/backend/server.py has the customMessage feature (OrderItemInput.customMessage field validator + order_item_public emitting the field) but the live deploy pod does NOT. Verification: `python -c \"import requests,random; mob='9'+''.join(str(random.randint(0,9)) for _ in range(9)); ...\"` then POST a 501-char customMessage to preview URL — currently returns 200, after redeploy should return 422.",
+    "After redeploy, re-run `EXPO_PUBLIC_BACKEND_URL=https://local-orders-deploy.preview.emergentagent.com pytest /app/backend/tests/test_custom_message.py -v -o asyncio_mode=auto` — must be 7/7 PASS.",
+    "Then run Playwright e2e (skipped this iteration because backend was stale and would have produced misleading red results): register a fresh buyer + seller via seeder, login as buyer, navigate to /buyer-seller-items, type into [data-testid=\"custom-message-input-<itemId>\"], add to cart, navigate to /buyer-cart, verify [data-testid=\"cart-custom-message-<itemId>\"] preloaded with the same text and [data-testid=\"cart-custom-message-counter-<itemId>\"] shows N/500, edit message, place order, then assert [data-testid=\"order-item-custom-message-<itemId>\"] on /buyer-order-detail shows the edited message. Then logout, login as seller, navigate to seller orders list → tap into the same order → verify same testID shows the message.",
+    "(Optional, doc-only) The product screen (buyer-seller-items.tsx) also shows a character counter testID `custom-message-counter-<itemId>` — this is not mentioned in the review_request features list but is a nice addition. No action needed."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py OrderItemInput.trim_and_limit_message (lines 766-778) correctly handles None → None, empty/whitespace-only → None, len>500 → ValueError (→422). The Optional[str] default of None ensures omitted field works for backward compat. ✓",
+    "/app/backend/server.py order_item_public (line 746) uses doc.get('customMessage') so legacy order_items docs without the key return None rather than KeyError. ✓ Verified by the legacy-doc test that $unsets the field and re-GETs.",
+    "/app/backend/server.py create_order (line 1052) stores `line.customMessage` (already trimmed by the validator) — no double-trim, no separate sanitisation needed. ✓",
+    "/app/frontend/src/lib/api.ts createOrder signature includes optional customMessage on each item (line 143) and OrderItem TS type marks customMessage as optional/nullable (line 296) for legacy orders. ✓",
+    "/app/frontend/app/buyer-cart.tsx character counter (line 239) reads (line.customMessage || '').length / CUSTOM_MESSAGE_MAX_LENGTH — handles null/undefined safely. ✓",
+    "/app/frontend/app/buyer-order-detail.tsx (line 183) trims the displayed message before checking emptiness — consistent with backend's storage rule. Shows 'No custom message' placeholder when empty/null. ✓",
+    "Same /buyer-order-detail screen is used for both buyer and seller (seller's orders list navigates there too) — so verifying it for one userType verifies both views as the review_request notes.",
+    "No file >700 lines in the customMessage diff. ✓ No HTML primitives. ✓ All styles in StyleSheet. ✓"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_custom_message.py (new — 7 pytest cases covering A/B/C/D/E/F/G plus exactly-500-char accepted)",
+    "/app/test_reports/pytest/custom_message.xml (new — JUnit output)"
+  ],
+  "success_rate": {
+    "backend": "100% against local backend (7/7) — 0% against deploy preview URL (0/7) due to stale deployment, NOT a code defect",
+    "frontend": "Not exercised via Playwright this iteration — would have produced misleading red because the underlying preview backend is stale. Frontend code review passes 100%."
+  },
+  "seed_data_creation": "Each backend test self-seeds: registers a fresh buyer + seller (random 10-digit mobiles), creates connection, accepts it, creates 2 active items, then runs assertions. Cleanup is per-test-run (test_database keeps growing — non-blocking). Existing /app/backend/tests/setup_cart_badge_fixture.py can be reused for the Playwright run after redeploy.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "ROOT CAUSE: this kubernetes env has TWO backends — (1) local dev at http://localhost:8001 (live-reloads from /app/backend/server.py, served by supervisor), and (2) deploy preview at https://local-orders-deploy.preview.emergentagent.com which is a SEPARATE pod with its OWN MongoDB (proven: same mobile number registers successfully in both — they don't share data). The frontend's EXPO_PUBLIC_BACKEND_URL points to (2). When main agent edits server.py, only (1) updates; (2) remains stale until a deploy is triggered. To re-validate this story end-to-end: (a) trigger a deploy/redeploy of the backend so the preview URL also has OrderItemInput.customMessage; (b) re-run `EXPO_PUBLIC_BACKEND_URL=https://local-orders-deploy.preview.emergentagent.com pytest /app/backend/tests/test_custom_message.py -v -o asyncio_mode=auto` — should be 7/7; (c) then run a Playwright flow against the preview URL exercising product screen → cart → place order → buyer order detail → seller order detail (same /buyer-order-detail route). To run the backend tests right now against the local pod (which works): `EXPO_PUBLIC_BACKEND_URL=http://localhost:8001 pytest /app/backend/tests/test_custom_message.py -v -o asyncio_mode=auto`.",
+  "rca_of_issue": "RCA: backend code in /app/backend/server.py correctly implements the feature (OrderItemInput.customMessage with field_validator that trims, normalises blank→None, and rejects >500 chars; order_item_public uses doc.get so legacy docs surface null). The local supervisor backend passes all 7 pytest cases. HOWEVER the deploy preview URL (which the Expo frontend uses) is a STALE separately-deployed pod that pre-dates this feature: POST 501-char returns 200 (no validator) and items[] in both POST and GET responses do NOT contain the customMessage key (no order_item_public emit), proving the deployed OrderItemInput model still lacks the field. Verified by registering the same random mobile via both URLs — both succeed (separate MongoDBs). Reproduction: `EXPO_PUBLIC_BACKEND_URL=https://local-orders-deploy.preview.emergentagent.com pytest /app/backend/tests/test_custom_message.py` → 7/7 FAIL. Mitigation: redeploy the backend so the preview pod picks up the new server.py. After redeploy, the same pytest command should be 7/7 PASS and the Playwright e2e flow will work because the frontend code is already correct (testIDs, maxLength, multiline, character counter, sanitization, persistence to cart storage, payload to createOrder all wired)."
+}

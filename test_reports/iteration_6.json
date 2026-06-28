@@ -1,0 +1,33 @@
+{
+  "summary": "Android hardware back-button fix on buyer home & seller dashboard validated. Web preview cannot dispatch a true Android HW back event (BackHandler is a no-op on web), so verification was split into: (a) static code review of /app/frontend/app/(buyer)/home.tsx (lines 35-47) and /app/frontend/app/(seller)/dashboard.tsx (lines 39-51) confirming the useFocusEffect+BackHandler.addEventListener('hardwareBackPress', ...) pattern is implemented correctly (subscribed only while focused, cleaned up via sub.remove() in the effect's return, handler is fire-and-forget signOut()+router.replace('/login') then returns true to consume the event so the default index.tsx loading-loop is never re-entered), and (b) Playwright web regression of the in-app Appbar logout button (testID='logout-btn') which now routes to '/login' instead of '/' on BOTH roles, plus the index '/' auto-redirect for logged-in users. Backend smoke check: GET /api/ → {service:'LocalOrders API', phase:1} 200. All 3 regression flows PASS. No code changes made.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_6.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "BackHandler subscription is inside useFocusEffect with a cleanup that calls sub.remove() — correct pattern; the handler is active only while the screen is focused and is removed when navigating to a sub-screen (so HW back from sub-screens still works normally and returns to home).",
+    "onBack returns true synchronously to consume the event; signOut() + router.replace('/login') runs in an IIFE — this is the correct way to satisfy BackHandler's sync boolean contract while still kicking off the async logout+nav. router.replace ensures the home is removed from the back-stack, so pressing back again from /login does NOT return to home.",
+    "Logout Appbar button (testID='logout-btn') was correctly changed to router.replace('/login') in BOTH home.tsx (line 56) and dashboard.tsx (line 73). Previously routed to '/' which would have re-entered the index.tsx loading branch (`if (loading || user) return spinner`) for ~1 tick before redirecting — the new direct '/login' replace eliminates that flash.",
+    "useFocusEffect dep is [signOut]; signOut is wrapped in useCallback with empty deps in auth-context.tsx (line 50-53), so the BackHandler subscription is stable and not re-registered on every render.",
+    "auth-context.signOut atomically removes the token from secure storage then setUser(null) — the (!user) guard at home.tsx:49 and dashboard.tsx:53 makes the screen render null during the brief window before router.replace('/login') completes, preventing any flash of stale data.",
+    "Edge case considered: rapid double-back. After the first back press the screen loses focus during router.replace('/login') so the BackHandler subscription is removed by useFocusEffect's cleanup → subsequent presses fall through to system default. Safe.",
+    "Note (informational, not a regression): The web preview's browser-Back button does NOT trigger BackHandler — that's expected (BackHandler is Android-native only). The browser-Back test in this run navigated from /login back to /home (cached URL), but this does NOT reflect Android behaviour. On a real Android device the hardware Back fires the handler which consumes the event and replace-navigates to /login. This was confirmed only by static review per the agent_to_agent_context_note."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "smoke-only (heartbeat 200; no new endpoints touched by this fix)",
+    "frontend": "3/3 web-verifiable flows PASS (buyer logout-btn→/login, seller logout-btn→/login, index→buyer-home redirect for logged-in user). HW-back behaviour confirmed by static review only — see notes."
+  },
+  "seed_data_creation": "Created two ephemeral accounts per run via /api/auth/register/{buyer,seller} with random 9-prefix 10-digit mobiles, PIN 1234, mock OTP 123456. No persistent test users.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "BackHandler.addEventListener cannot be triggered from Playwright on the Expo web preview (BackHandler is a no-op outside of Android native). To truly E2E-verify the HW back behaviour, build an APK / use Expo Go on an Android device or run an Android emulator with Appium/Detox. For web preview, the in-app logout button is the closest proxy and is now wired to the same router.replace('/login') target as the HW-back handler, so testing it covers the post-handler behaviour. If main agent wants automated HW-back coverage, add a unit test in /app/frontend that mounts the screen, fires the registered hardwareBackPress listener directly via require('react-native').BackHandler, and asserts signOut was called and router.replace was invoked with '/login'.",
+  "rca_of_issue": "Original bug: pressing Android HW back on /(buyer)/home or /(seller)/dashboard fell through to the default behaviour, which popped the navigator back to the root index.tsx. index.tsx renders the loading spinner whenever (loading || user) is true and only navigates *via useEffect* once mounted — so on the brief reconciliation tick the user saw a spinner and, because the effect re-routed back to /(buyer)/home or /(seller)/dashboard, the cycle could appear stuck. Fix (implemented by main agent in iteration_6): register a useFocusEffect(BackHandler.addEventListener('hardwareBackPress', onBack)) on both screens; onBack signs the user out then router.replace('/login') and returns true to consume the event. With signOut having set user=null, index.tsx is never re-entered, and /login is now the canonical post-logout destination. Verified via static review + UI regression on logout button (same code path post-handler)."
+}
